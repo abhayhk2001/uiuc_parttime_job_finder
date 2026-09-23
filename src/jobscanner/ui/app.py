@@ -13,6 +13,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+from collections import deque
 from pathlib import Path
 from tkinter import messagebox
 from typing import Optional
@@ -34,6 +35,9 @@ from jobscanner.ui.sash import Sash
 
 _SCAN_DONE = "__SCAN_DONE__"
 
+#: Write chunks retained for the collapsed log console.
+_LOG_BUFFER_CHUNKS = 2000
+
 # Root grid columns.
 _COL_SIDEBAR = 0
 _COL_SASH = 1
@@ -50,6 +54,10 @@ class JobScannerApp(ctk.CTk):
         self.scanning = False
         self._log_q: "queue.Queue[str]" = queue.Queue()
         self._log_visible = False
+        #: Scan output kept so the console can be opened mid-scan and still
+        #: show everything from the start. Bounded so a long scan can't grow
+        #: it without limit.
+        self._log_buffer: "deque[str]" = deque(maxlen=_LOG_BUFFER_CHUNKS)
         self.section_var: str = db.SECTION_NEW
 
         theme.apply_appearance()
@@ -116,16 +124,18 @@ class JobScannerApp(ctk.CTk):
                          padx=(4, theme.PAD), pady=4)
 
     def _build_footer(self) -> None:
-        footer = ctk.CTkFrame(self)
-        footer.grid(row=2, column=0, columnspan=_COL_COUNT, sticky="ew",
-                    padx=theme.PAD, pady=(4, theme.PAD))
-        footer.grid_columnconfigure(0, weight=1)
+        self.footer = ctk.CTkFrame(self)
+        self.footer.grid(row=2, column=0, columnspan=_COL_COUNT, sticky="nsew",
+                         padx=theme.PAD, pady=(4, theme.PAD))
+        self.footer.grid_columnconfigure(0, weight=1)
 
         self.log_toggle = ctk.CTkButton(
-            footer, text="▾ Log", width=80, command=self._toggle_log)
+            self.footer, text="▾ Log", width=80, command=self._toggle_log)
         self.log_toggle.grid(row=0, column=1, padx=6, pady=6)
 
-        self.log_console = LogConsole(self)
+        # The console is a child of the footer so it opens directly beneath
+        # its own toggle, rather than in a row below the footer entirely.
+        self.log_console = LogConsole(self.footer)
 
     # -- sidebar resize ----------------------------------------------------
 
@@ -308,9 +318,11 @@ class JobScannerApp(ctk.CTk):
         self.after(80, self._drain_log_queue)
 
     def _append_log(self, text: str) -> None:
-        if not self._log_visible:
-            return
-        self.log_console.append(text)
+        # Always buffer: output produced while the console was collapsed used
+        # to be dropped, so opening it mid-scan showed an empty box.
+        self._log_buffer.append(text)
+        if self._log_visible:
+            self.log_console.append(text)
 
     def _scan_finished(self) -> None:
         self.scanning = False
@@ -321,11 +333,16 @@ class JobScannerApp(ctk.CTk):
     def _toggle_log(self) -> None:
         self._log_visible = not self._log_visible
         if self._log_visible:
-            self.log_console.grid(row=3, column=0, columnspan=_COL_COUNT,
-                                  sticky="ew", padx=theme.PAD, pady=(0, 4))
+            self.log_console.grid(row=1, column=0, columnspan=2,
+                                  sticky="nsew", padx=6, pady=(0, 6))
+            self.footer.grid_rowconfigure(1, weight=1)
+            # Replay whatever was logged while the console was collapsed.
+            self.log_console.clear()
+            self.log_console.append("".join(self._log_buffer))
             self.log_toggle.configure(text="▴ Log")
         else:
             self.log_console.grid_forget()
+            self.footer.grid_rowconfigure(1, weight=0)
             self.log_toggle.configure(text="▾ Log")
 
     # -- close -------------------------------------------------------------

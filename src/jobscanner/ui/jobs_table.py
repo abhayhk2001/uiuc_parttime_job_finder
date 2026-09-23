@@ -25,6 +25,9 @@ _RIGHT_ALIGNED = ("job_id", "matches", "reviewed")
 #: Columns that read best highest-first on the first click.
 _DESCENDING_FIRST = ("matches",)
 
+#: Sort applied before the user clicks anything.
+DEFAULT_SORT_COLUMN = "matches"
+
 
 def _row_tag(reviewed: bool, match_count: int) -> str:
     if reviewed and match_count:
@@ -77,6 +80,11 @@ class JobsTable(ctk.CTkFrame):
         self.tree.configure(yscrollcommand=scrollbar.set)
 
         theme.style_treeview(self)
+
+        # "matches" has always been declared descending-first, but no sort was
+        # ever applied until the user clicked a header. Apply it up front so
+        # the most promising rows sit at the top on open.
+        self.sort_by(DEFAULT_SORT_COLUMN)
 
     # -- selection ---------------------------------------------------------
 
