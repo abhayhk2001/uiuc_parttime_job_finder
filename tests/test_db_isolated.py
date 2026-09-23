@@ -9,55 +9,19 @@ from __future__ import annotations
 import shutil
 import sqlite3
 import sys
-import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = REPO_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+from support import REPO_ROOT, TempDB, check as _check, eq as _eq  # noqa: E402
+from support import run_module  # noqa: E402
 
 from jobscanner import config  # noqa: E402
 from jobscanner import storage as db  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# Tiny test helpers (no pytest dependency required)
-# ---------------------------------------------------------------------------
-
-class _TestFailed(AssertionError):
-    pass
-
-
-def _check(cond: bool, msg: str) -> None:
-    if not cond:
-        raise _TestFailed(msg)
-
-
-def _eq(a, b, msg: str = "") -> None:
-    if a != b:
-        raise _TestFailed(f"{msg}: expected {b!r}, got {a!r}")
-
-
-class _TempDB:
-    """Context manager that yields a fresh DB path inside a temp dir,
-    cleaning up after the test."""
-
-    def __init__(self) -> None:
-        self.dir: Path | None = None
-        self.path: Path | None = None
-
-    def __enter__(self) -> Path:
-        self.dir = Path(tempfile.mkdtemp(prefix="db_isolated_"))
-        self.path = self.dir / "jobs.db"
-        return self.path
-
-    def __exit__(self, *exc) -> None:
-        if self.dir and self.dir.exists():
-            shutil.rmtree(self.dir, ignore_errors=True)
+def _TempDB() -> TempDB:
+    return TempDB(prefix="db_isolated_")
 
 
 # ---------------------------------------------------------------------------
@@ -523,51 +487,6 @@ def test_set_follow_up_overrides_default() -> None:
             "explicit set_follow_up should override default")
 
 
-# ---------------------------------------------------------------------------
-# Test runner (no pytest required)
-# ---------------------------------------------------------------------------
-
-def _run_all() -> tuple[int, int]:
-    tests = [
-        test_init_creates_schema_and_indexes,
-        test_init_idempotent,
-        test_upsert_listing_inserts_then_updates,
-        test_upsert_does_not_touch_reviewed_or_to_apply,
-        test_update_details_does_not_touch_reviewed_or_to_apply,
-        test_mark_applied_is_atomic,
-        test_section_counts_and_queries,
-        test_bulk_actions_are_scoped_to_section,
-        test_backup_and_restore_round_trip,
-        test_prune_keeps_most_recent_n,
-        test_sash_widths_round_trip,
-        test_mark_applied_records_timestamps,
-        test_mark_further_follow_up_resets_clock,
-        test_archive_and_unarchive_round_trip,
-        test_section_predicates_isolate_follow_up_and_archived,
-        test_auto_archive_removed_jobs_archives_only_active_rows,
-        test_bulk_follow_up_actions,
-        test_set_follow_up_overrides_default,
-    ]
-    passed = 0
-    failed = 0
-    for fn in tests:
-        name = fn.__name__
-        try:
-            fn()
-        except _TestFailed as exc:
-            failed += 1
-            print(f"  FAIL  {name}: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            print(f"  ERROR {name}: {exc!r}")
-        else:
-            passed += 1
-            print(f"  ok    {name}")
-    print()
-    print(f"{passed} passed, {failed} failed.")
-    return passed, failed
-
-
 if __name__ == "__main__":
-    p, f = _run_all()
-    sys.exit(0 if f == 0 else 1)
+    _, failed, _ = run_module(globals(), "Storage layer")
+    sys.exit(1 if failed else 0)

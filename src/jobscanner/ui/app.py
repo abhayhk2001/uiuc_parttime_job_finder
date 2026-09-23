@@ -97,7 +97,7 @@ class JobScannerApp(ctk.CTk):
 
         self.refresh()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.after(60, self._drain_log_queue)
+        self._log_after_id = self.after(60, self._drain_log_queue)
 
     # -- layout ------------------------------------------------------------
 
@@ -423,7 +423,7 @@ class JobScannerApp(ctk.CTk):
                     self._append_log(item)
         except queue.Empty:
             pass
-        self.after(80, self._drain_log_queue)
+        self._log_after_id = self.after(80, self._drain_log_queue)
 
     def _append_log(self, text: str) -> None:
         # Always buffer: output produced while the console was collapsed used
@@ -458,6 +458,17 @@ class JobScannerApp(ctk.CTk):
     def _on_close(self) -> None:
         self._save_layout()
         self.destroy()
+
+    def destroy(self) -> None:
+        # Cancel the log poll before tearing the window down, or the pending
+        # callback fires against a dead widget and Tk reports an error.
+        if getattr(self, "_log_after_id", None) is not None:
+            try:
+                self.after_cancel(self._log_after_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._log_after_id = None
+        super().destroy()
 
 
 def launch(db_path: Optional[Path] = None,

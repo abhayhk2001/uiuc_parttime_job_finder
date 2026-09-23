@@ -82,8 +82,9 @@ class Toolbar(ctk.CTkFrame):
         self.status_label.configure(text_color=theme.SUCCESS)
 
         def _expire() -> None:
-            # A newer toast (or a plain set_status) supersedes this one.
-            if seq != self._toast_seq:
+            # A newer toast (or a plain set_status) supersedes this one, and
+            # the window may be gone by the time this fires.
+            if seq != self._toast_seq or not self.winfo_exists():
                 return
             self.status_label.configure(text_color=theme.MUTED_TEXT)
             if on_expire is not None:

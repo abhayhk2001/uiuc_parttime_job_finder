@@ -315,13 +315,34 @@ A scan writes to the DB in several places (`init_db` migrations, `upsert_listing
 ## Tests
 
 ```bash
-python tests/test_db_isolated.py    # no pytest needed
-pytest tests/test_db_isolated.py    # also works
+python tests/run_all.py                 # everything, no pytest needed
+python tests/test_gui_layout.py         # one module, as a plain script
+pytest tests/                           # also works: pip install -e ".[dev]"
+pytest tests/test_gui_layout.py -k sidebar
 ```
 
-Smoke tests for the storage layer. Every test runs against its own
-`tempfile.mkdtemp()` database and never touches `data/jobs.db` — any new test
-in this repo should mirror that pattern.
+58 tests in two layers:
+
+| Module | Covers |
+| ------ | ------ |
+| `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune |
+| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Follow Up → Archived walk, sorting, filtering, both dialogs, log buffering, layout persistence |
+| `test_gui_layout.py` | Real pixel geometry: panes not overlapping, toolbar/footer spanning, the log console inside the footer, preset buttons in distinct cells, collapse/expand, both sashes |
+| `test_gui_bulk_actions.py` | Every registered bulk action, confirmation in both directions, toasts, the All section |
+| `test_gui_interactions.py` | Detail-pane widget reuse, text reflow, empty states, keyboard navigation and shortcuts, the row context menu |
+
+Notes:
+
+- **No test ever opens `data/jobs.db`.** Each one runs against its own
+  `tempfile.mkdtemp()` database, removed afterwards. New tests should use
+  `support.TempDB` or the `support.gui_app` context manager.
+- **The GUI tests run headlessly** — they build real windows, drive them, and
+  assert on widget state and screen geometry, but need no interaction. Where
+  Tk or customtkinter is unavailable they skip rather than fail, so
+  `python tests/run_all.py` still exercises the storage layer on a headless
+  box.
+- Test discovery is automatic (`support.run_module` scans for `test_*`), so a
+  new test can't silently go unrun.
 
 ## Troubleshooting
 

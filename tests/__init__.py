@@ -1,14 +1,27 @@
-"""Isolated smoke tests for db.py.
+"""Test suite for the UIUC part-time job scanner.
 
-These tests never touch the user's real ``data/jobs.db`` — they all run
-against a temporary SQLite file created via ``tempfile.mkdtemp()``. The
-pattern is the safe one: any future test in this repo should mirror it.
+Two layers:
 
-Run with::
+* ``test_db_isolated``   -- the storage layer, against temporary SQLite files.
+* ``test_gui_*``         -- the GUI, driven headlessly against throwaway
+  databases. These skip themselves where Tk or customtkinter isn't
+  available, so the suite stays useful on a headless box.
 
-    python tests/test_db_isolated.py
+No test ever opens the user's real ``data/jobs.db``: every one runs inside
+a ``tempfile.mkdtemp()`` directory that is removed afterwards. Any new test
+in this repo should mirror that -- see ``support.TempDB`` and
+``support.gui_app``.
 
-The module also works under pytest::
+Run the lot::
 
-    pytest tests/test_db_isolated.py
+    python tests/run_all.py
+
+Or a single module, as a plain script (no pytest needed)::
+
+    python tests/test_gui_layout.py
+
+pytest works too, and is the easiest way to run one test::
+
+    pytest tests/
+    pytest tests/test_gui_layout.py -k sidebar
 """
