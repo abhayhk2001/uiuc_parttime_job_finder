@@ -12,13 +12,15 @@ import customtkinter as ctk
 
 from jobscanner import storage as db
 from jobscanner.ui import theme
+from jobscanner.ui.bulk_actions import BULK_ACTIONS
 
 DEFAULT_WIDTH = db.DEFAULT_LAYOUT["sidebar_width"]
 MIN_WIDTH = 180
 MAX_WIDTH = 700
 COLLAPSED_WIDTH = 58
 
-_MAIN_SECTIONS = (db.SECTION_NEW, db.SECTION_OLD, db.SECTION_REVIEWED)
+_MAIN_SECTIONS = (db.SECTION_ALL, db.SECTION_NEW, db.SECTION_OLD,
+                  db.SECTION_REVIEWED)
 
 #: Sections shown as their own single-entry block rather than under SECTIONS.
 _STANDALONE_BLOCKS = (
@@ -29,6 +31,7 @@ _STANDALONE_BLOCKS = (
 
 #: Short labels for the collapsed rail.
 _RAIL_LABELS = {
+    db.SECTION_ALL: "All",
     db.SECTION_NEW: "New",
     db.SECTION_OLD: "Old",
     db.SECTION_REVIEWED: "Rev",
@@ -36,18 +39,6 @@ _RAIL_LABELS = {
     db.SECTION_FOLLOW_UP: "F/U",
     db.SECTION_ARCHIVED: "Arc",
 }
-
-#: (section, button label) for the bulk-action buttons.
-BULK_SPECS: tuple[tuple[str, str], ...] = (
-    (db.SECTION_NEW, "Mark all New reviewed"),
-    (db.SECTION_OLD, "Mark all Old reviewed"),
-    (db.SECTION_REVIEWED, "Revisit all Reviewed"),
-    (db.SECTION_TO_APPLY, "Mark all To Apply Applied"),
-    (db.SECTION_TO_APPLY, "Unmark all To Apply"),
-    (db.SECTION_FOLLOW_UP, "Mark all Follow Up Further"),
-    (db.SECTION_FOLLOW_UP, "Archive all Follow Up"),
-)
-
 
 class SectionsPanel(ctk.CTkFrame):
     """Per-section counters + bulk actions + keyword list."""
@@ -59,7 +50,7 @@ class SectionsPanel(ctk.CTkFrame):
         self,
         master,
         on_select_section: Callable[[str], None],
-        on_bulk_action: Callable[[str, str], None],
+        on_bulk_action: Callable[[str], None],
         on_edit_keywords: Callable[[], None],
         on_toggle_collapsed: Optional[Callable[[bool], None]] = None,
         width: int = DEFAULT_WIDTH,
@@ -149,13 +140,13 @@ class SectionsPanel(ctk.CTkFrame):
         row += 1
         self._header_label(parent, "BULK ACTIONS", row)
         row += 1
-        for section, label in BULK_SPECS:
+        for action in BULK_ACTIONS:
             btn = ctk.CTkButton(
-                parent, text=label, anchor="w", height=30,
-                command=lambda s=section, l=label: self._on_bulk_action(s, l),
+                parent, text=action.label, anchor="w", height=30,
+                command=lambda a=action.id: self._on_bulk_action(a),
             )
             btn.grid(row=row, column=0, sticky="ew", padx=6, pady=2)
-            self._bulk_buttons[label] = btn
+            self._bulk_buttons[action.id] = btn
             row += 1
 
         self._divider(parent, row)
@@ -245,9 +236,9 @@ class SectionsPanel(ctk.CTkFrame):
                     widget.configure(fg_color="transparent",
                                      text_color=theme.BODY_TEXT)
 
-        for section, label in BULK_SPECS:
-            self._bulk_buttons[label].configure(
-                state="normal" if counts.get(section) else "disabled")
+        for action in BULK_ACTIONS:
+            self._bulk_buttons[action.id].configure(
+                state="normal" if counts.get(action.section) else "disabled")
 
         self.refresh_keywords(keywords)
 

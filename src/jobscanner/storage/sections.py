@@ -99,7 +99,7 @@ SECTIONS: tuple[Section, ...] = (
             order_by=_ORDER_BY_FOLLOW_UP),
     Section(SECTION_ARCHIVED, "Archived", _archived_clause,
             order_by=_ORDER_BY_ARCHIVED),
-    Section(SECTION_ALL, "All", _all_clause, counted=False),
+    Section(SECTION_ALL, "All", _all_clause),
 )
 
 SECTIONS_BY_KEY: dict[str, Section] = {s.key: s for s in SECTIONS}

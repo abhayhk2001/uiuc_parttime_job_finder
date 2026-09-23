@@ -26,6 +26,7 @@ from jobscanner import pipeline
 from jobscanner import storage as db
 from jobscanner.ui import sidebar as sidebar_mod
 from jobscanner.ui import job_actions, theme
+from jobscanner.ui.bulk_actions import BULK_ACTIONS_BY_ID
 from jobscanner.ui.detail_pane import DetailPane
 from jobscanner.ui.dialogs.follow_up import FollowUpDateEditor
 from jobscanner.ui.dialogs.keywords import KeywordEditor
@@ -239,44 +240,23 @@ class JobScannerApp(ctk.CTk):
         self.sections_panel.set_section(section)
         self.refresh()
 
-    def bulk_mark_section(self, section: str, label: str = "") -> None:
-        """Bulk action dispatcher.
-
-        For New / Old: mark all as reviewed.
-        For Reviewed: clear the reviewed flag (Revisit).
-        For To Apply / Follow Up: dispatch by label.
-        """
+    def bulk_mark_section(self, action_id: str) -> None:
+        """Run the bulk action with this id, confirming first if it says to."""
+        action = BULK_ACTIONS_BY_ID.get(action_id)
+        if action is None:
+            return
+        if action.confirm and not messagebox.askokcancel(
+            action.label, action.confirm, parent=self, default="cancel"
+        ):
+            return
         try:
-            if section == db.SECTION_TO_APPLY:
-                if "Unmark" in label:
-                    n = db.bulk_clear_to_apply(self.db_path)
-                    msg = f"Removed {n} job(s) from To Apply."
-                else:
-                    n = db.bulk_mark_all_applied(self.db_path)
-                    msg = f"Marked {n} job(s) as applied (moved to Follow Up)."
-            elif section == db.SECTION_FOLLOW_UP:
-                if "Archive" in label:
-                    n = db.bulk_archive_section(section, self.db_path)
-                    msg = f"Archived {n} job(s) from Follow Up."
-                else:
-                    n = db.bulk_mark_further_follow_up(section,
-                                                       path=self.db_path)
-                    msg = (f"Reset follow-up date for {n} job(s) to today + "
-                           f"{config.FOLLOW_UP_WINDOW_DAYS} days.")
-            else:
-                is_revisit = section == db.SECTION_REVIEWED
-                n = db.bulk_set_reviewed(section, not is_revisit, self.db_path)
-                name = db.SECTION_LABELS[section]
-                if is_revisit:
-                    msg = (f"Revisited {n} job(s) (moved from "
-                           f"'{name}' back to Old/New).")
-                else:
-                    msg = f"Marked {n} job(s) in '{name}' as reviewed."
+            affected = action.run(self.db_path)
         except Exception as exc:
             messagebox.showerror("Bulk update failed", str(exc))
             return
-        messagebox.showinfo("Done", msg)
         self.refresh()
+        # A toast instead of a modal the user has to dismiss every time.
+        self.toolbar.show_toast(action.message(affected), self._refresh_status)
 
     # -- detail ------------------------------------------------------------
 

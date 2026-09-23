@@ -25,6 +25,7 @@ class Toolbar(ctk.CTkFrame):
         self.search_var = ctk.StringVar()
         self.matches_only_var = ctk.BooleanVar(value=False)
         self.status_var = ctk.StringVar(value="Ready.")
+        self._toast_seq = 0
 
         self.run_btn = ctk.CTkButton(
             self, text="▶ Run Scan", width=130, command=on_scan)
@@ -64,7 +65,31 @@ class Toolbar(ctk.CTkFrame):
         return self.matches_only_var.get()
 
     def set_status(self, text: str) -> None:
+        self._toast_seq += 1  # cancel any pending toast revert
+        self.status_label.configure(text_color=theme.MUTED_TEXT)
         self.status_var.set(text)
+
+    def show_toast(self, text: str, on_expire=None, ms: int = 5000) -> None:
+        """Show `text` in the status area for a few seconds, then revert.
+
+        Bulk actions used to confirm themselves with a modal dialog the user
+        had to dismiss every time; this replaces that for the non-destructive
+        ones.
+        """
+        self._toast_seq += 1
+        seq = self._toast_seq
+        self.status_var.set(text)
+        self.status_label.configure(text_color=theme.SUCCESS)
+
+        def _expire() -> None:
+            # A newer toast (or a plain set_status) supersedes this one.
+            if seq != self._toast_seq:
+                return
+            self.status_label.configure(text_color=theme.MUTED_TEXT)
+            if on_expire is not None:
+                on_expire()
+
+        self.after(ms, _expire)
 
     def set_scanning(self, scanning: bool) -> None:
         self.run_btn.configure(
