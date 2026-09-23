@@ -174,11 +174,13 @@ class KeywordEditor(ctk.CTkToplevel):
 class SectionsPanel(ctk.CTkFrame):
     """Left sidebar: per-section counters + bulk actions + keyword list."""
 
-    SECTION_KEYS = (db.SECTION_NEW, db.SECTION_OLD, db.SECTION_REVIEWED)
+    SECTION_KEYS = (db.SECTION_NEW, db.SECTION_OLD, db.SECTION_REVIEWED,
+                     db.SECTION_TO_APPLY)
     SECTION_LABELS = {
         db.SECTION_NEW: "New",
         db.SECTION_OLD: "Old",
         db.SECTION_REVIEWED: "Reviewed",
+        db.SECTION_TO_APPLY: "To Apply",
     }
 
     def __init__(self, master: "JobScannerApp") -> None:
@@ -195,13 +197,16 @@ class SectionsPanel(ctk.CTkFrame):
         self._build()
 
     def _build(self) -> None:
+        # SECTIONS block
         ctk.CTkLabel(
             self, text="SECTIONS", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray40", "gray70"),
         ).grid(row=0, column=0, sticky="ew", padx=10, pady=(12, 4))
 
-        for i, key in enumerate(self.SECTION_KEYS, start=1):
+        main_section_keys = (db.SECTION_NEW, db.SECTION_OLD,
+                             db.SECTION_REVIEWED)
+        for i, key in enumerate(main_section_keys, start=1):
             btn = ctk.CTkButton(
                 self, text="", anchor="w", height=32,
                 fg_color="transparent",
@@ -212,53 +217,76 @@ class SectionsPanel(ctk.CTkFrame):
             btn.grid(row=i, column=0, sticky="ew", padx=6, pady=2)
             self._section_buttons[key] = btn
 
+        # TO APPLY block (separate from main three sections).
         ctk.CTkFrame(self, height=1).grid(
             row=4, column=0, sticky="ew", padx=10, pady=(12, 4))
+        ctk.CTkLabel(
+            self, text="TO APPLY", anchor="w",
+            font=ctk.CTkFont(weight="bold"),
+            text_color=("gray40", "gray70"),
+        ).grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 4))
+        btn = ctk.CTkButton(
+            self, text="", anchor="w", height=32,
+            fg_color="transparent",
+            text_color=("gray10", "gray90"),
+            hover_color=("gray70", "gray30"),
+            command=lambda: self.app.select_section(db.SECTION_TO_APPLY),
+        )
+        btn.grid(row=6, column=0, sticky="ew", padx=6, pady=2)
+        self._section_buttons[db.SECTION_TO_APPLY] = btn
 
+        # BULK ACTIONS block.
+        ctk.CTkFrame(self, height=1).grid(
+            row=7, column=0, sticky="ew", padx=10, pady=(12, 4))
         ctk.CTkLabel(
             self, text="BULK ACTIONS", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray40", "gray70"),
-        ).grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 4))
+        ).grid(row=8, column=0, sticky="ew", padx=10, pady=(0, 4))
 
         bulk_specs = (
             (db.SECTION_NEW, "Mark all New reviewed"),
             (db.SECTION_OLD, "Mark all Old reviewed"),
             (db.SECTION_REVIEWED, "Revisit all Reviewed"),
+            (db.SECTION_TO_APPLY, "Mark all To Apply Applied"),
+            (db.SECTION_TO_APPLY, "Unmark all To Apply"),
         )
-        for i, (key, label) in enumerate(bulk_specs, start=6):
+        for i, (key, label) in enumerate(bulk_specs, start=9):
             btn = ctk.CTkButton(
                 self, text=label, anchor="w", height=30,
-                command=lambda k=key: self.app.bulk_mark_section(k),
+                command=lambda k=key, l=label: self.app.bulk_mark_section(k, l),
             )
             btn.grid(row=i, column=0, sticky="ew", padx=6, pady=2)
-            self._bulk_buttons[key] = btn
+            self._bulk_buttons[label] = btn
 
         # KEYWORDS section — header, count, edit button, scrollable list.
+        kw_row = 9 + len(bulk_specs)
         ctk.CTkFrame(self, height=1).grid(
-            row=9, column=0, sticky="ew", padx=10, pady=(12, 4))
+            row=kw_row, column=0, sticky="ew", padx=10, pady=(12, 4))
         ctk.CTkLabel(
             self, text="KEYWORDS", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray40", "gray70"),
-        ).grid(row=10, column=0, sticky="ew", padx=10, pady=(0, 4))
+        ).grid(row=kw_row + 1, column=0, sticky="ew", padx=10, pady=(0, 4))
 
         self._kw_count_label = ctk.CTkLabel(
             self, text="0 loaded", anchor="w",
             text_color=("gray50", "gray70"),
         )
-        self._kw_count_label.grid(row=11, column=0, sticky="ew",
+        self._kw_count_label.grid(row=kw_row + 2, column=0, sticky="ew",
                                   padx=10, pady=(0, 4))
 
         ctk.CTkButton(
             self, text="Edit Keywords\u2026", anchor="w", height=30,
             command=self.app._open_keyword_editor,
-        ).grid(row=12, column=0, sticky="ew", padx=6, pady=(0, 4))
+        ).grid(row=kw_row + 3, column=0, sticky="ew",
+               padx=6, pady=(0, 4))
 
+        kw_list_row = kw_row + 4
         self._kw_list_frame = ctk.CTkScrollableFrame(self, label_text="")
-        self._kw_list_frame.grid(row=13, column=0, sticky="nsew",
+        self._kw_list_frame.grid(row=kw_list_row, column=0, sticky="nsew",
                                  padx=6, pady=(4, 6))
-        self.grid_rowconfigure(13, weight=1)
+        self.grid_rowconfigure(kw_list_row, weight=1)
         self._kw_list_frame.grid_columnconfigure(0, weight=1)
 
     def set_section(self, key: str) -> None:
@@ -278,12 +306,16 @@ class SectionsPanel(ctk.CTkFrame):
                 btn.configure(fg_color="transparent")
                 btn.configure(text_color=("gray10", "gray90"))
 
-        self._bulk_buttons[db.SECTION_NEW].configure(
+        self._bulk_buttons["Mark all New reviewed"].configure(
             state="normal" if counts[db.SECTION_NEW] else "disabled")
-        self._bulk_buttons[db.SECTION_OLD].configure(
+        self._bulk_buttons["Mark all Old reviewed"].configure(
             state="normal" if counts[db.SECTION_OLD] else "disabled")
-        self._bulk_buttons[db.SECTION_REVIEWED].configure(
+        self._bulk_buttons["Revisit all Reviewed"].configure(
             state="normal" if counts[db.SECTION_REVIEWED] else "disabled")
+        self._bulk_buttons["Mark all To Apply Applied"].configure(
+            state="normal" if counts[db.SECTION_TO_APPLY] else "disabled")
+        self._bulk_buttons["Unmark all To Apply"].configure(
+            state="normal" if counts[db.SECTION_TO_APPLY] else "disabled")
 
         self.refresh_keywords(matcher.load_keywords(self.app.keywords_path))
 
@@ -329,6 +361,10 @@ class JobScannerApp(ctk.CTk):
         # `matches` defaults to descending; everything else is ascending.
         self._sort_state: dict[str, bool] = {key: False for key, _, _ in COLUMNS}
         self._sort_state["matches"] = True
+        # Active sort — the column/direction the user most recently chose.
+        # Used by _refresh_table to re-apply the sort after rebuilding rows.
+        self._active_sort_col: Optional[str] = None
+        self._active_sort_desc: bool = False
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -336,9 +372,11 @@ class JobScannerApp(ctk.CTk):
         self.geometry("1380x860")
         self.minsize(1080, 640)
 
-        self.grid_columnconfigure(0, weight=0)   # sidebar fixed width
-        self.grid_columnconfigure(1, weight=2)   # table
-        self.grid_columnconfigure(2, weight=2)   # detail
+        # Sidebar / sash / table / detail.
+        self.grid_columnconfigure(0, weight=0)   # sidebar
+        self.grid_columnconfigure(1, weight=0)   # sash
+        self.grid_columnconfigure(2, weight=2)   # table
+        self.grid_columnconfigure(3, weight=2)   # detail
         self.grid_rowconfigure(1, weight=1)
 
         self._build_toolbar()
@@ -388,14 +426,35 @@ class JobScannerApp(ctk.CTk):
         ).grid(row=0, column=4, sticky="ew", padx=8, pady=6)
 
     def _build_body(self) -> None:
-        # Sections sidebar
-        self._sections_panel = SectionsPanel(self)
-        self._sections_panel.grid(row=1, column=0, sticky="nsew",
-                                  padx=(8, 4), pady=4)
+        # Load persisted sidebar width if any.
+        saved = db.get_sash_widths(self.db_path)
+        initial_sidebar_width = saved[0] if saved else 240
+        self._sidebar_min_width = 180
+        self._sidebar_max_width = 700
 
-        # Table area
+        # Sections sidebar (resizable).
+        self._sections_panel = SectionsPanel(self)
+        self._sections_panel.configure(width=initial_sidebar_width)
+        self._sections_panel.grid(row=1, column=0, sticky="nsew",
+                                  padx=(8, 0), pady=4)
+
+        # Sash column — drag to resize sidebar.
+        self._sash = ctk.CTkFrame(
+            self, width=4, cursor="sb_h_double_arrow",
+            fg_color=("#2a2a2a", "#2a2a2a"),
+        )
+        self._sash.grid(row=1, column=1, sticky="ns", padx=0, pady=4)
+        self._sash.bind("<ButtonPress-1>", self._sash_press)
+        self._sash.bind("<B1-Motion>", self._sash_drag)
+        self._sash.bind("<Enter>",
+                         lambda _e: self._sash.configure(
+                             cursor="sb_h_double_arrow"))
+        self._sash.bind("<Leave>",
+                         lambda _e: self._sash.configure(cursor=""))
+
+        # Table area.
         table_frame = ctk.CTkFrame(self)
-        table_frame.grid(row=1, column=1, sticky="nsew", padx=(0, 4), pady=4)
+        table_frame.grid(row=1, column=2, sticky="nsew", padx=(0, 4), pady=4)
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
 
@@ -420,11 +479,11 @@ class JobScannerApp(ctk.CTk):
         sb.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=sb.set)
 
-        # Detail pane
+        # Detail pane.
         right = ctk.CTkFrame(self)
-        right.grid(row=1, column=2, sticky="nsew", padx=(4, 8), pady=4)
+        right.grid(row=1, column=3, sticky="nsew", padx=(4, 8), pady=4)
         right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(6, weight=1)
+        right.grid_rowconfigure(7, weight=1)
 
         self.detail_title = ctk.CTkLabel(
             right, text="(select a job)", anchor="w",
@@ -457,29 +516,38 @@ class JobScannerApp(ctk.CTk):
         self.detail_meta.grid(row=2, column=0, sticky="ew",
                               padx=10, pady=(0, 8))
 
-        # Mark Reviewed / Revisit on its own line.
-        btn_row = ctk.CTkFrame(right, fg_color="transparent")
-        btn_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
-        btn_row.grid_columnconfigure(0, weight=0)
-        btn_row.grid_columnconfigure(1, weight=1)
+        # Primary action button (context-aware: Mark Reviewed / Revisit / Mark Applied).
         self.reviewed_var = ctk.BooleanVar(value=False)
         self.reviewed_btn = ctk.CTkButton(
-            btn_row, text="\u2713 Mark Reviewed", width=160,
-            command=self._on_reviewed_toggle,
+            right, text="\u2713 Mark Reviewed", width=180, height=32,
+            command=self._on_primary_toggle,
         )
-        self.reviewed_btn.grid(row=0, column=0, sticky="w")
+        self.reviewed_btn.grid(row=3, column=0, sticky="w", padx=10, pady=(0, 4))
+
+        # Secondary To Apply toggle.
+        self.to_apply_btn = ctk.CTkButton(
+            right, text="\u2606 Add to To Apply", width=180, height=28,
+            fg_color="transparent",
+            text_color=("gray30", "gray85"),
+            border_width=1,
+            border_color=("gray60", "gray40"),
+            hover_color=("gray80", "gray25"),
+            command=self._on_to_apply_toggle,
+        )
+        self.to_apply_btn.grid(row=4, column=0, sticky="w",
+                               padx=10, pady=(0, 8))
 
         ctk.CTkLabel(
             right, text="Matched keywords", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray50", "gray70"),
-        ).grid(row=4, column=0, sticky="ew", padx=10, pady=(4, 0))
+        ).grid(row=5, column=0, sticky="ew", padx=10, pady=(4, 0))
         self.chips_frame = ctk.CTkFrame(right, fg_color="transparent")
-        self.chips_frame.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 6))
+        self.chips_frame.grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 6))
 
         # Detail body sits below chips.
         self.detail_body_holder = ctk.CTkFrame(right, fg_color="transparent")
-        self.detail_body_holder.grid(row=6, column=0, sticky="nsew",
+        self.detail_body_holder.grid(row=7, column=0, sticky="nsew",
                                      padx=10, pady=(4, 10))
         self.detail_body_holder.grid_columnconfigure(0, weight=1)
         self.detail_body_holder.grid_rowconfigure(0, weight=1)
@@ -488,6 +556,33 @@ class JobScannerApp(ctk.CTk):
         self._detail_scroll.grid(row=0, column=0, sticky="nsew")
         self._detail_scroll.grid_columnconfigure(0, weight=1)
         self.detail_body = self._detail_scroll
+
+    # -- sash (sidebar resize) ------------------------------------------
+
+    def _sash_press(self, event):
+        self._drag_start_x = event.x_root
+        self._initial_sidebar_width = self._sections_panel.winfo_width()
+
+    def _sash_drag(self, event):
+        delta = event.x_root - self._drag_start_x
+        new_width = max(
+            self._sidebar_min_width,
+            min(self._sidebar_max_width,
+                self._initial_sidebar_width + delta),
+        )
+        self._sections_panel.configure(width=new_width)
+
+    def _save_sash_widths(self) -> None:
+        try:
+            # Use the configured (requested) width rather than winfo_width(),
+            # which can be stale before the widget re-renders.
+            sidebar_w = self._sections_panel.cget("width") or 0
+            sidebar_w = int(sidebar_w)
+            # Persist as [sidebar]. Table and detail fill remaining space
+            # proportionally — no separate persistence needed.
+            db.set_sash_widths([sidebar_w, 0, 0], self.db_path)
+        except Exception:
+            pass
 
     def _build_footer(self) -> None:
         footer = ctk.CTkFrame(self)
@@ -589,6 +684,10 @@ class JobScannerApp(ctk.CTk):
         if prev_selection and prev_selection[0] in self.tree.get_children():
             self.tree.selection_set(prev_selection[0])
 
+        # Re-apply the user's chosen sort so toggling reviewed/to_apply
+        # doesn't silently re-sort to DB order.
+        self._apply_active_sort()
+
         self._sections_panel.refresh()
         self._refresh_status()
         self._refresh_detail_for_current_selection()
@@ -625,7 +724,7 @@ class JobScannerApp(ctk.CTk):
             w.destroy()
         for w in self.detail_body.winfo_children():
             w.destroy()
-        self._set_reviewed_button(False)
+        self._set_primary_button(to_apply=False, reviewed=False)
 
     # -- sections -------------------------------------------------------
 
@@ -636,21 +735,34 @@ class JobScannerApp(ctk.CTk):
         self._sections_panel.set_section(section)
         self._refresh_table()
 
-    def bulk_mark_section(self, section: str) -> None:
-        if section not in (db.SECTION_NEW, db.SECTION_OLD, db.SECTION_REVIEWED):
-            return
-        # The Reviewed-section action is "Revisit" — i.e. un-mark reviewed.
-        is_revisit = section == db.SECTION_REVIEWED
+    def bulk_mark_section(self, section: str, label: str = "") -> None:
+        """Bulk action dispatcher.
+
+        For New / Old: mark all as reviewed.
+        For Reviewed: clear the reviewed flag (Revisit).
+        For To Apply: dispatch based on the button label
+            ("Mark all To Apply Applied" or "Unmark all To Apply").
+        """
         try:
-            n = db.bulk_set_reviewed(section, reviewed=not is_revisit)
+            if section == db.SECTION_TO_APPLY:
+                if "Unmark" in label:
+                    n = db.bulk_clear_to_apply()
+                    msg = f"Removed {n} job(s) from To Apply."
+                else:
+                    n = db.bulk_mark_all_applied()
+                    msg = f"Marked {n} job(s) as applied (moved to Reviewed)."
+            else:
+                is_revisit = section == db.SECTION_REVIEWED
+                n = db.bulk_set_reviewed(section, reviewed=not is_revisit)
+                section_name = self._sections_panel.SECTION_LABELS[section]
+                if is_revisit:
+                    msg = (f"Revisited {n} job(s) (moved from "
+                           f"'{section_name}' back to Old/New).")
+                else:
+                    msg = f"Marked {n} job(s) in '{section_name}' as reviewed."
         except Exception as exc:
             messagebox.showerror("Bulk update failed", str(exc))
             return
-        label = self._sections_panel.SECTION_LABELS[section]
-        if is_revisit:
-            msg = f"Revisited {n} job(s) (moved from '{label}' back to Old/New)."
-        else:
-            msg = f"Marked {n} job(s) in '{label}' as reviewed."
         messagebox.showinfo("Done", msg)
         self._refresh_table()
 
@@ -685,7 +797,10 @@ class JobScannerApp(ctk.CTk):
         self.detail_meta.configure(text="\n".join(bits))
 
         # Reviewed/Revisit button reflects the row's reviewed state
-        self._set_reviewed_button(bool(job.get("reviewed")))
+        self._set_primary_button(
+            to_apply=bool(job.get("to_apply")),
+            reviewed=bool(job.get("reviewed")),
+        )
 
         # Matched-keyword chips
         for w in self.chips_frame.winfo_children():
@@ -731,31 +846,82 @@ class JobScannerApp(ctk.CTk):
                 messagebox.showerror("Open URL failed", str(exc),
                                      parent=self)
 
-    def _on_reviewed_toggle(self) -> None:
+    def _on_primary_toggle(self) -> None:
         if not self._detail_job_id:
             return
-        # The button toggles the *current* reviewed state.
-        new_val = not bool(self.reviewed_var.get())
         try:
-            db.set_reviewed(self._detail_job_id, new_val, self.db_path)
+            current = db.get_job(self._detail_job_id, self.db_path) or {}
+            if current.get("to_apply"):
+                db.mark_applied(self._detail_job_id, self.db_path)
+            else:
+                db.set_reviewed(
+                    self._detail_job_id,
+                    not bool(current.get("reviewed")),
+                    self.db_path,
+                )
         except Exception as exc:
             messagebox.showerror("Update failed", str(exc))
             return
         self._refresh_table()
 
-    def _set_reviewed_button(self, reviewed: bool) -> None:
+    def _on_to_apply_toggle(self) -> None:
+        if not self._detail_job_id:
+            return
+        try:
+            current = db.get_job(self._detail_job_id, self.db_path) or {}
+            if current.get("reviewed"):
+                # Cannot add a reviewed job to To Apply.
+                return
+            db.set_to_apply(
+                self._detail_job_id,
+                not bool(current.get("to_apply")),
+                self.db_path,
+            )
+        except Exception as exc:
+            messagebox.showerror("Update failed", str(exc))
+            return
+        self._refresh_table()
+
+    def _set_primary_button(self, to_apply: bool, reviewed: bool) -> None:
         self.reviewed_var.set(bool(reviewed))
-        if reviewed:
+        if to_apply:
+            # Job is in the To Apply section — primary action is "Mark Applied".
+            self.reviewed_btn.configure(
+                text="\u2713 Mark Applied",
+                fg_color=("#0d8050", "#0a6640"),
+                hover_color=("#11965e", "#0d7a4a"),
+                state="normal",
+            )
+        elif reviewed:
             self.reviewed_btn.configure(
                 text="\u21BB Revisit",
                 fg_color=("#9b6b00", "#7a5100"),
                 hover_color=("#b07a00", "#8a5e00"),
+                state="normal",
             )
         else:
             self.reviewed_btn.configure(
                 text="\u2713 Mark Reviewed",
                 fg_color=("#1f6aa5", "#154a78"),
                 hover_color=("#2680c6", "#1a5a90"),
+                state="normal",
+            )
+
+        # Secondary To Apply toggle.
+        if to_apply:
+            self.to_apply_btn.configure(
+                text="\u2605 Remove from To Apply",
+                state="normal",
+            )
+        elif reviewed:
+            self.to_apply_btn.configure(
+                text="\u2606 Add to To Apply",
+                state="disabled",
+            )
+        else:
+            self.to_apply_btn.configure(
+                text="\u2606 Add to To Apply",
+                state="normal",
             )
 
     def _sort_by(self, col: str) -> None:
@@ -774,6 +940,31 @@ class JobScannerApp(ctk.CTk):
             self.tree.move(iid, "", i)
         # Toggle for the next click of the same column.
         self._sort_state[col] = not reverse
+        # Track active sort so _refresh_table can re-apply it after rebuild.
+        self._active_sort_col = col
+        self._active_sort_desc = reverse
+
+    def _apply_active_sort(self) -> None:
+        """Re-sort the live tree by the user's last-chosen column/direction.
+
+        Used by `_refresh_table` so toggling reviewed/to_apply preserves
+        the sort the user explicitly picked.
+        """
+        col = self._active_sort_col
+        if not col:
+            return
+        rows = [(self.tree.set(iid, col), iid)
+                for iid in self.tree.get_children("")]
+
+        def _key(t):
+            try:
+                return (0, int(t[0]))
+            except (ValueError, TypeError):
+                return (1, (t[0] or "").lower())
+
+        rows.sort(key=_key, reverse=self._active_sort_desc)
+        for i, (_, iid) in enumerate(rows):
+            self.tree.move(iid, "", i)
 
     # -- scan -----------------------------------------------------------
 
@@ -863,6 +1054,7 @@ class JobScannerApp(ctk.CTk):
     # -- close ----------------------------------------------------------
 
     def _on_close(self) -> None:
+        self._save_sash_widths()
         self.destroy()
 
 

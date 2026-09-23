@@ -15,6 +15,11 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 
+# Rolling backups (created by `python main.py` before any writes).
+# Keep them out of git — they're user data and are rotated by db.py.
+data/*.bak.*
+data/*.bak.*.partial
+
 # OS junk
 .DS_Store
 Thumbs.db

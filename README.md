@@ -55,15 +55,17 @@ The window is split into three columns:
 | ------------------- | ------------------------- | -------------------------- |
 | New / Old / Reviewed | Sortable, filterable rows  | Job details, Reviewed/Revisit button, matched keywords |
 
-- **Sections sidebar** — three blocks stacked, with live counts:
+- **Sections sidebar** — four blocks stacked, with live counts:
   - **SECTIONS** —
     - **New** — unreviewed jobs **first discovered in the most recent completed scan**. Anything that's already in the DB before the next scan runs is "Old".
     - **Old** — unreviewed jobs that pre-date the current scan (i.e. any non-New unreviewed row).
     - **Reviewed** — jobs you've already looked at.
-  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed".
+  - **TO APPLY** — jobs you've marked as "I want to apply to this one". Mutually exclusive with New/Old/Reviewed (a job is in exactly one of those four sections, plus ALL). Reviewed jobs cannot be added to To Apply.
+  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply".
   - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`.
+- **Resizable sidebar** — drag the thin sash between the sidebar and the table to widen or narrow it (180px – 700px). The table and detail pane auto-fill the remaining horizontal space. The chosen sidebar width is remembered across launches (stored in the `meta` table under `sash_widths_px`).
 - **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). The *Matched Keywords* and *Posted* columns were intentionally removed; keywords are shown as chips in the detail pane and `date_posted` was rarely populated by the source site.
-- **Sorting**: click any column header to sort. **Matches defaults to descending** (highest match count first); all other columns default to ascending. Click the same header again to flip direction. Internally-tracked per column.
+- **Sorting**: click any column header to sort. **Matches defaults to descending** (highest match count first); all other columns default to ascending. Click the same header again to flip direction. The chosen sort **persists across refreshes** — toggling Mark Reviewed, Mark Applied, Revisit, or adding/removing from To Apply preserves the user's chosen order. Internally-tracked per column.
 - **Highlight rules** in the table:
   - Bright green text = matched one or more keywords and is not yet reviewed.
   - Dim green text = matched keywords but already reviewed.
@@ -73,11 +75,29 @@ The window is split into three columns:
   1. **Title + job ID**.
   2. **VJB URL on its own line** — blue, single-clickable, opens in the default browser (cursor turns to a hand on hover).
   3. **Company**.
-  4. **Single dynamic button** — labelled **"✓ Mark Reviewed"** when the row is unreviewed and **"↻ Revisit"** when it is. Clicking always flips the reviewed flag and re-buckets the row silently — no toast, no sound, no badge.
-  5. **Matched keyword chips**.
-  6. **Description / Requirements / Skills** sections.
-  
+  4. **Primary action button** — context-aware:
+     - Unreviewed job → **"✓ Mark Reviewed"** (sets reviewed=1).
+     - Reviewed job → **"↻ Revisit"** (clears reviewed, row returns to New/Old).
+     - To Apply job → **"✓ Mark Applied"** — atomic transition: clears `to_apply` AND sets `reviewed=1`.
+  5. **Secondary To Apply toggle**:
+     - `to_apply=0` (and not reviewed) → **"☆ Add to To Apply"** (sets to_apply=1).
+     - `to_apply=1` → **"★ Remove from To Apply"** (clears to_apply).
+     - Already reviewed → button disabled.
+  6. **Matched keyword chips**.
+  7. **Description / Requirements / Skills** sections.
+
   The First/Last seen timestamps are intentionally hidden — they're internal bookkeeping and not user-facing.
+
+### To Apply state machine
+
+```
+   New ───────────► To Apply ────────► Reviewed
+   Old ────────► (Add to To Apply)  (Mark Applied)
+   Reviewed ──── (Revisit) ────►  New / Old   (to_apply stays 0)
+   To Apply ──── (Remove)   ────►  New / Old   (to_apply → 0)
+```
+
+The four user actions — Add to To Apply / Remove from To Apply / Mark Applied / Mark Reviewed / Revisit — are all silent; they update the DB and the row silently re-buckets.
 - **Free-text search** filters the currently selected section across title, company, description, requirements, skills, and matched keywords.
 - **"Matches only" toggle** hides non-matching rows inside the current section.
 - **"Run Scan"** runs the scanner in a background thread; live logs stream into a collapsible log console at the bottom of the window. The button is disabled while a scan is in flight. A successful scan advances the "New" cutoff — see the schema section.
@@ -120,7 +140,7 @@ data/jobs.db   produced on first run
 
 ## Database schema
 
-Created automatically; idempotent migrations add the `reviewed` column and the `meta` table to older DBs.
+Created automatically; idempotent migrations add the `reviewed` and `to_apply` columns and the `meta` table to older DBs.
 
 ### `jobs` table
 
@@ -138,13 +158,14 @@ Created automatically; idempotent migrations add the `reviewed` column and the `
 | `last_seen_at`    | TEXT | UTC ISO-8601, refreshed each scan.               |
 | `matched_keywords`| TEXT | Comma-separated lowercase keywords.              |
 | `reviewed`        | INT  | 0 or 1; managed by the GUI.                      |
+| `to_apply`        | INT  | 0 or 1; user-marked "I want to apply". Toggled from the detail pane. Migration adds this. |
 
 ### `meta` table
 
 | Column  | Type | Notes                                                            |
 | ------- | ---- | ---------------------------------------------------------------- |
-| `key`   | TEXT | Primary key. Currently only `latest_scan_started_at`.           |
-| `value` | TEXT | The UTC ISO-8601 timestamp recorded at the *start* of the scan. The GUI uses this as the New/Old boundary. |
+| `key`   | TEXT | Primary key. Used for `latest_scan_started_at` (ISO timestamp at the start of the latest successful scan — drives the New/Old boundary) and `sash_widths_px` (JSON list persisting the sidebar width between launches). |
+| `value` | TEXT | String payload — see above. |
 
 ## Editing keywords
 
@@ -159,6 +180,30 @@ rm data/jobs.db
 ```
 
 Note: `init_db()` runs an idempotent migration that adds the `reviewed` column to older DBs, so you generally don't need to delete the file — just delete it if you want a complete clean slate.
+
+## Backups
+
+Every non-dry-run `python main.py` scan makes a timestamped copy of `data/jobs.db` to `data/jobs.db.bak.<UTC>` *before* writing anything. The three most recent backups are kept; older ones are pruned automatically.
+
+```
+data/                                       # created on first run
+  jobs.db                                   # live database
+  jobs.db.bak.2026-09-23T17-29-55.bak       # most recent backup
+  jobs.db.bak.2026-09-23T17-21-03.bak       # ...
+  jobs.db.bak.2026-09-23T16-58-12.bak       # oldest kept
+```
+
+### Restore from a backup
+
+```bash
+cp data/jobs.db.bak.2026-09-23T17-21-03.bak data/jobs.db
+```
+
+The backup files are excluded from git via `.gitignore`.
+
+### Why this exists
+
+A scan writes to the DB in several places (`init_db` migrations, `upsert_listing`, `update_details`, `set_latest_scan_started_at`). The backups exist so that if any of those writes ever corrupt or wipe state, you can roll back to the previous scan's snapshot with a single copy. The functions live in `db.backup_db()` and `db.prune_old_backups()`.
 
 ## Troubleshooting
 

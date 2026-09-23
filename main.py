@@ -46,6 +46,16 @@ def run(dry_run: bool = False, verbose: bool = False, fetch_missing: bool = True
     print(f"[init] DB at {config.DB_PATH}")
     db.init_db()
 
+    # Snapshot the DB before we write anything. No-op if the DB doesn't exist
+    # yet (a fresh run will create it). Skip on dry-run / gui-only.
+    if not dry_run:
+        backup = db.backup_db()
+        if backup is not None:
+            print(f"[init] Backed up DB to {backup.name}")
+            db.prune_old_backups()
+        else:
+            print("[init] No prior DB to back up (first run).")
+
     keywords = matcher.load_keywords()
     print(f"[init] Loaded {len(keywords)} keywords from {config.KEYWORDS_PATH}")
 
