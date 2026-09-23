@@ -195,11 +195,21 @@ def test_section_counts_and_queries() -> None:
         _eq(counts["reviewed"], 1, "E0 should be Reviewed")
         _eq(counts["to_apply"], 1, "E1 should be To Apply")
 
-        # bulk_mark_all_applied clears to_apply and adds reviewed.
+        # bulk_mark_all_applied runs the full Applied transition, same as the
+        # single-row mark_applied: to_apply cleared, reviewed set, and
+        # applied_at/follow_up_at recorded -- so the row lands in Follow Up,
+        # not Reviewed.
         n = db.bulk_mark_all_applied(p)
         _eq(n, 1, "exactly 1 row should be marked applied")
-        _eq(db.get_section_counts(p)["reviewed"], 2, "Reviewed should be 2")
-        _eq(db.get_section_counts(p)["to_apply"], 0, "To Apply should be 0")
+        counts = db.get_section_counts(p)
+        _eq(counts["to_apply"], 0, "To Apply should be 0")
+        _eq(counts["follow_up"], 1, "E1 should have moved to Follow Up")
+        _eq(counts["reviewed"], 1, "only E0 should remain in Reviewed")
+        row = db.get_job("E1", p)
+        _check(bool(row and row["applied_at"]),
+               "bulk_mark_all_applied must record applied_at")
+        _check(bool(row and row["follow_up_at"]),
+               "bulk_mark_all_applied must record follow_up_at")
 
 
 def test_bulk_actions_are_scoped_to_section() -> None:
