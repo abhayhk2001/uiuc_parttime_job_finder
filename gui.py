@@ -12,6 +12,7 @@ import queue
 import sys
 import threading
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,38 @@ COLUMNS: tuple[tuple[str, str, int], ...] = (
 
 _END = "end"
 
+
+def _relative_days(iso_ts: str) -> str:
+    """Human-friendly relative time, e.g. 'in 7 days', 'today', '5 days ago'."""
+    try:
+        dt = datetime.fromisoformat(iso_ts)
+    except (ValueError, TypeError):
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta_days = (dt.date() - now.date()).days
+    if delta_days == 0:
+        return "today"
+    if delta_days == 1:
+        return "in 1 day"
+    if delta_days > 0:
+        return f"in {delta_days} days"
+    if delta_days == -1:
+        return "1 day ago"
+    return f"{abs(delta_days)} days ago"
+
+
+def _parse_iso_date(s: str) -> Optional[datetime]:
+    """Parse a YYYY-MM-DD string into a UTC datetime. Returns None on failure."""
+    try:
+        # Accept "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS+00:00".
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 class _StreamToQueue:
     """File-like shim that mirrors writes into a queue (so the GUI log can
@@ -171,16 +204,130 @@ class KeywordEditor(ctk.CTkToplevel):
             cb(self.keywords)
 
 
+class FollowUpDateEditor(ctk.CTkToplevel):
+    """Popup for editing a job's `follow_up_at`. Shows preset offset buttons
+    and a custom YYYY-MM-DD entry."""
+
+    PRESETS = (
+        (1, "in 1 day"),
+        (3, "in 3 days"),
+        (7, "in 1 week"),
+        (14, "in 2 weeks"),
+        (30, "in 1 month"),
+        (90, "in 3 months"),
+    )
+
+    def __init__(
+        self,
+        master: "JobScannerApp",
+        job_id: str,
+        initial_date: str,
+        on_save=None,
+    ) -> None:
+        super().__init__(master)
+        self.title("Edit follow-up date")
+        self.geometry("420x320")
+        self.minsize(360, 280)
+        self.transient(master)
+        self.after(50, self.grab_set)
+
+        self._job_id = job_id
+        self._on_save_cb = on_save
+        self._current_iso = initial_date
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(99, weight=1)
+
+        ctk.CTkLabel(
+            self, text="Pick a follow-up date",
+            anchor="w", font=ctk.CTkFont(weight="bold"),
+        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 6))
+
+        # Preset offset buttons
+        ctk.CTkLabel(
+            self, text="Preset offsets:", anchor="w",
+            text_color=("gray40", "gray70"),
+        ).grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 2))
+        for i, (days, label) in enumerate(self.PRESETS):
+            r = 2 + i // 3
+            c = i % 3
+            ctk.CTkButton(
+                self, text=label, width=110, height=28,
+                command=lambda d=days: self._apply_offset(d),
+            ).grid(row=r, column=0, sticky="ew", padx=12, pady=2)
+            # grid_columnconfigure(0, weight=1) above already; layout fills column
+
+        # Custom date row
+        custom_row = 2 + (len(self.PRESETS) + 2) // 3 + 1
+        ctk.CTkLabel(
+            self, text="Or pick a custom date (YYYY-MM-DD):",
+            anchor="w", text_color=("gray40", "gray70"),
+        ).grid(row=custom_row, column=0, sticky="ew", padx=12, pady=(8, 2))
+        self.date_var = ctk.StringVar(value=initial_date or "")
+        self.date_entry = ctk.CTkEntry(
+            self, textvariable=self.date_var, placeholder_text="YYYY-MM-DD",
+            width=200,
+        )
+        self.date_entry.grid(row=custom_row + 1, column=0, sticky="w",
+                             padx=12, pady=(0, 4))
+        ctk.CTkButton(
+            self, text="Set custom date", width=200, height=28,
+            command=self._apply_custom,
+        ).grid(row=custom_row + 2, column=0, sticky="w",
+               padx=12, pady=(0, 6))
+
+        # Close
+        ctk.CTkButton(
+            self, text="Close", width=120, height=28,
+            command=self.destroy,
+        ).grid(row=custom_row + 3, column=0, sticky="w",
+               padx=12, pady=(8, 12))
+
+    def _apply_offset(self, days: int) -> None:
+        new_iso = db._add_days_iso(db.now_iso(), days)
+        db.set_follow_up(self._job_id, new_iso)
+        self._current_iso = new_iso
+        self.date_var.set(new_iso[:10])
+        if self._on_save_cb:
+            self._on_save_cb()
+        self.destroy()
+
+    def _apply_custom(self) -> None:
+        raw = (self.date_var.get() or "").strip()
+        dt = _parse_iso_date(raw)
+        if dt is None:
+            messagebox.showerror(
+                "Invalid date",
+                f"Couldn't parse '{raw}'. Use YYYY-MM-DD format.",
+                parent=self,
+            )
+            return
+        iso = dt.isoformat(timespec="seconds")
+        db.set_follow_up(self._job_id, iso)
+        self._current_iso = iso
+        if self._on_save_cb:
+            self._on_save_cb()
+        self.destroy()
+
+
 class SectionsPanel(ctk.CTkFrame):
     """Left sidebar: per-section counters + bulk actions + keyword list."""
 
-    SECTION_KEYS = (db.SECTION_NEW, db.SECTION_OLD, db.SECTION_REVIEWED,
-                     db.SECTION_TO_APPLY)
+    SECTION_KEYS = (
+        db.SECTION_NEW,
+        db.SECTION_OLD,
+        db.SECTION_REVIEWED,
+        db.SECTION_TO_APPLY,
+        db.SECTION_FOLLOW_UP,
+        db.SECTION_ARCHIVED,
+    )
     SECTION_LABELS = {
         db.SECTION_NEW: "New",
         db.SECTION_OLD: "Old",
         db.SECTION_REVIEWED: "Reviewed",
         db.SECTION_TO_APPLY: "To Apply",
+        db.SECTION_FOLLOW_UP: "Follow Up",
+        db.SECTION_ARCHIVED: "Archived",
     }
 
     def __init__(self, master: "JobScannerApp") -> None:
@@ -197,7 +344,7 @@ class SectionsPanel(ctk.CTkFrame):
         self._build()
 
     def _build(self) -> None:
-        # SECTIONS block
+        # SECTIONS block (New / Old / Reviewed — the main three).
         ctk.CTkLabel(
             self, text="SECTIONS", anchor="w",
             font=ctk.CTkFont(weight="bold"),
@@ -217,32 +364,47 @@ class SectionsPanel(ctk.CTkFrame):
             btn.grid(row=i, column=0, sticky="ew", padx=6, pady=2)
             self._section_buttons[key] = btn
 
-        # TO APPLY block (separate from main three sections).
-        ctk.CTkFrame(self, height=1).grid(
-            row=4, column=0, sticky="ew", padx=10, pady=(12, 4))
-        ctk.CTkLabel(
-            self, text="TO APPLY", anchor="w",
-            font=ctk.CTkFont(weight="bold"),
-            text_color=("gray40", "gray70"),
-        ).grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 4))
-        btn = ctk.CTkButton(
-            self, text="", anchor="w", height=32,
-            fg_color="transparent",
-            text_color=("gray10", "gray90"),
-            hover_color=("gray70", "gray30"),
-            command=lambda: self.app.select_section(db.SECTION_TO_APPLY),
-        )
-        btn.grid(row=6, column=0, sticky="ew", padx=6, pady=2)
-        self._section_buttons[db.SECTION_TO_APPLY] = btn
+        # Helper to build a "single-selector" block (TO APPLY / FOLLOW UP / ARCHIVED).
+        row_cursor = [4]
+
+        def _add_single_block(label: str, section_key: str) -> None:
+            r = row_cursor[0]
+            ctk.CTkFrame(self, height=1).grid(
+                row=r, column=0, sticky="ew", padx=10, pady=(12, 4))
+            r += 1
+            ctk.CTkLabel(
+                self, text=label, anchor="w",
+                font=ctk.CTkFont(weight="bold"),
+                text_color=("gray40", "gray70"),
+            ).grid(row=r, column=0, sticky="ew", padx=10, pady=(0, 4))
+            r += 1
+            btn = ctk.CTkButton(
+                self, text="", anchor="w", height=32,
+                fg_color="transparent",
+                text_color=("gray10", "gray90"),
+                hover_color=("gray70", "gray30"),
+                command=lambda k=section_key: self.app.select_section(k),
+            )
+            btn.grid(row=r, column=0, sticky="ew", padx=6, pady=2)
+            self._section_buttons[section_key] = btn
+            r += 1
+            row_cursor[0] = r
+
+        _add_single_block("TO APPLY", db.SECTION_TO_APPLY)
+        _add_single_block("FOLLOW UP", db.SECTION_FOLLOW_UP)
+        _add_single_block("ARCHIVED", db.SECTION_ARCHIVED)
 
         # BULK ACTIONS block.
+        r = row_cursor[0]
         ctk.CTkFrame(self, height=1).grid(
-            row=7, column=0, sticky="ew", padx=10, pady=(12, 4))
+            row=r, column=0, sticky="ew", padx=10, pady=(12, 4))
+        r += 1
         ctk.CTkLabel(
             self, text="BULK ACTIONS", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray40", "gray70"),
-        ).grid(row=8, column=0, sticky="ew", padx=10, pady=(0, 4))
+        ).grid(row=r, column=0, sticky="ew", padx=10, pady=(0, 4))
+        r += 1
 
         bulk_specs = (
             (db.SECTION_NEW, "Mark all New reviewed"),
@@ -250,39 +412,44 @@ class SectionsPanel(ctk.CTkFrame):
             (db.SECTION_REVIEWED, "Revisit all Reviewed"),
             (db.SECTION_TO_APPLY, "Mark all To Apply Applied"),
             (db.SECTION_TO_APPLY, "Unmark all To Apply"),
+            (db.SECTION_FOLLOW_UP, "Mark all Follow Up Further"),
+            (db.SECTION_FOLLOW_UP, "Archive all Follow Up"),
         )
-        for i, (key, label) in enumerate(bulk_specs, start=9):
+        for key, label in bulk_specs:
             btn = ctk.CTkButton(
                 self, text=label, anchor="w", height=30,
                 command=lambda k=key, l=label: self.app.bulk_mark_section(k, l),
             )
-            btn.grid(row=i, column=0, sticky="ew", padx=6, pady=2)
+            btn.grid(row=r, column=0, sticky="ew", padx=6, pady=2)
             self._bulk_buttons[label] = btn
+            r += 1
 
         # KEYWORDS section — header, count, edit button, scrollable list.
-        kw_row = 9 + len(bulk_specs)
         ctk.CTkFrame(self, height=1).grid(
-            row=kw_row, column=0, sticky="ew", padx=10, pady=(12, 4))
+            row=r, column=0, sticky="ew", padx=10, pady=(12, 4))
+        r += 1
         ctk.CTkLabel(
             self, text="KEYWORDS", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray40", "gray70"),
-        ).grid(row=kw_row + 1, column=0, sticky="ew", padx=10, pady=(0, 4))
+        ).grid(row=r, column=0, sticky="ew", padx=10, pady=(0, 4))
+        r += 1
 
         self._kw_count_label = ctk.CTkLabel(
             self, text="0 loaded", anchor="w",
             text_color=("gray50", "gray70"),
         )
-        self._kw_count_label.grid(row=kw_row + 2, column=0, sticky="ew",
+        self._kw_count_label.grid(row=r, column=0, sticky="ew",
                                   padx=10, pady=(0, 4))
+        r += 1
 
         ctk.CTkButton(
             self, text="Edit Keywords\u2026", anchor="w", height=30,
             command=self.app._open_keyword_editor,
-        ).grid(row=kw_row + 3, column=0, sticky="ew",
-               padx=6, pady=(0, 4))
+        ).grid(row=r, column=0, sticky="ew", padx=6, pady=(0, 4))
+        r += 1
 
-        kw_list_row = kw_row + 4
+        kw_list_row = r
         self._kw_list_frame = ctk.CTkScrollableFrame(self, label_text="")
         self._kw_list_frame.grid(row=kw_list_row, column=0, sticky="nsew",
                                  padx=6, pady=(4, 6))
@@ -316,6 +483,10 @@ class SectionsPanel(ctk.CTkFrame):
             state="normal" if counts[db.SECTION_TO_APPLY] else "disabled")
         self._bulk_buttons["Unmark all To Apply"].configure(
             state="normal" if counts[db.SECTION_TO_APPLY] else "disabled")
+        self._bulk_buttons["Mark all Follow Up Further"].configure(
+            state="normal" if counts[db.SECTION_FOLLOW_UP] else "disabled")
+        self._bulk_buttons["Archive all Follow Up"].configure(
+            state="normal" if counts[db.SECTION_FOLLOW_UP] else "disabled")
 
         self.refresh_keywords(matcher.load_keywords(self.app.keywords_path))
 
@@ -483,7 +654,7 @@ class JobScannerApp(ctk.CTk):
         right = ctk.CTkFrame(self)
         right.grid(row=1, column=3, sticky="nsew", padx=(4, 8), pady=4)
         right.grid_columnconfigure(0, weight=1)
-        right.grid_rowconfigure(7, weight=1)
+        right.grid_rowconfigure(8, weight=1)
 
         self.detail_title = ctk.CTkLabel(
             right, text="(select a job)", anchor="w",
@@ -516,7 +687,7 @@ class JobScannerApp(ctk.CTk):
         self.detail_meta.grid(row=2, column=0, sticky="ew",
                               padx=10, pady=(0, 8))
 
-        # Primary action button (context-aware: Mark Reviewed / Revisit / Mark Applied).
+        # Primary action button (context-aware across 5 sections).
         self.reviewed_var = ctk.BooleanVar(value=False)
         self.reviewed_btn = ctk.CTkButton(
             right, text="\u2713 Mark Reviewed", width=180, height=32,
@@ -524,7 +695,8 @@ class JobScannerApp(ctk.CTk):
         )
         self.reviewed_btn.grid(row=3, column=0, sticky="w", padx=10, pady=(0, 4))
 
-        # Secondary To Apply toggle.
+        # Secondary context-aware button
+        # (Add/Remove To Apply | Archive | hidden in Archived).
         self.to_apply_btn = ctk.CTkButton(
             right, text="\u2606 Add to To Apply", width=180, height=28,
             fg_color="transparent",
@@ -532,22 +704,34 @@ class JobScannerApp(ctk.CTk):
             border_width=1,
             border_color=("gray60", "gray40"),
             hover_color=("gray80", "gray25"),
-            command=self._on_to_apply_toggle,
+            command=self._on_secondary_toggle,
         )
         self.to_apply_btn.grid(row=4, column=0, sticky="w",
                                padx=10, pady=(0, 8))
+
+        # Follow-up edit row — only visible for Follow Up section.
+        self.follow_up_edit_btn = ctk.CTkButton(
+            right, text="", width=240, height=28,
+            fg_color="transparent",
+            text_color=("gray30", "gray85"),
+            border_width=1,
+            border_color=("gray60", "gray40"),
+            hover_color=("gray80", "gray25"),
+            command=self._open_follow_up_editor,
+        )
+        # Not gridded initially — _populate_detail grid/grid_remove's it.
 
         ctk.CTkLabel(
             right, text="Matched keywords", anchor="w",
             font=ctk.CTkFont(weight="bold"),
             text_color=("gray50", "gray70"),
-        ).grid(row=5, column=0, sticky="ew", padx=10, pady=(4, 0))
+        ).grid(row=6, column=0, sticky="ew", padx=10, pady=(4, 0))
         self.chips_frame = ctk.CTkFrame(right, fg_color="transparent")
-        self.chips_frame.grid(row=6, column=0, sticky="ew", padx=10, pady=(0, 6))
+        self.chips_frame.grid(row=7, column=0, sticky="ew", padx=10, pady=(0, 6))
 
         # Detail body sits below chips.
         self.detail_body_holder = ctk.CTkFrame(right, fg_color="transparent")
-        self.detail_body_holder.grid(row=7, column=0, sticky="nsew",
+        self.detail_body_holder.grid(row=8, column=0, sticky="nsew",
                                      padx=10, pady=(4, 10))
         self.detail_body_holder.grid_columnconfigure(0, weight=1)
         self.detail_body_holder.grid_rowconfigure(0, weight=1)
@@ -720,6 +904,7 @@ class JobScannerApp(ctk.CTk):
         self.detail_title.configure(text="(select a job)")
         self.detail_url_label.configure(text="")
         self.detail_meta.configure(text="")
+        self.follow_up_edit_btn.grid_remove()
         for w in self.chips_frame.winfo_children():
             w.destroy()
         for w in self.detail_body.winfo_children():
@@ -740,8 +925,10 @@ class JobScannerApp(ctk.CTk):
 
         For New / Old: mark all as reviewed.
         For Reviewed: clear the reviewed flag (Revisit).
-        For To Apply: dispatch based on the button label
-            ("Mark all To Apply Applied" or "Unmark all To Apply").
+        For To Apply: dispatch by label ("Mark all To Apply Applied" /
+            "Unmark all To Apply").
+        For Follow Up: dispatch by label ("Mark all Follow Up Further" /
+            "Archive all Follow Up").
         """
         try:
             if section == db.SECTION_TO_APPLY:
@@ -750,7 +937,17 @@ class JobScannerApp(ctk.CTk):
                     msg = f"Removed {n} job(s) from To Apply."
                 else:
                     n = db.bulk_mark_all_applied()
-                    msg = f"Marked {n} job(s) as applied (moved to Reviewed)."
+                    msg = (f"Marked {n} job(s) as applied "
+                           f"(moved to Follow Up).")
+            elif section == db.SECTION_FOLLOW_UP:
+                if "Archive" in label:
+                    n = db.bulk_archive_section(section)
+                    msg = f"Archived {n} job(s) from Follow Up."
+                else:
+                    n = db.bulk_mark_further_follow_up(section)
+                    msg = (f"Reset follow-up date for {n} job(s) "
+                           f"to today + "
+                           f"{config.FOLLOW_UP_WINDOW_DAYS} days.")
             else:
                 is_revisit = section == db.SECTION_REVIEWED
                 n = db.bulk_set_reviewed(section, reviewed=not is_revisit)
@@ -789,18 +986,45 @@ class JobScannerApp(ctk.CTk):
         self._current_url = url
         self.detail_url_label.configure(text=url)
 
-        # Meta block: company only (First/Last seen are internal).
+        # Meta block: company + applied / follow-up / archived info.
         company = (job.get("company") or "").strip()
         bits = []
         if company:
             bits.append(f"Company: {company}")
+        applied_at = (job.get("applied_at") or "").strip()
+        follow_up_at = (job.get("follow_up_at") or "").strip()
+        archived = bool(job.get("archived"))
+        archived_at = (job.get("archived_at") or "").strip()
+
+        if applied_at:
+            bits.append(f"Applied: {applied_at}")
+        if follow_up_at:
+            rel = _relative_days(follow_up_at)
+            bits.append(f"Follow up: {follow_up_at}  ({rel})")
+        if archived and archived_at:
+            bits.append(f"Archived: {archived_at}")
         self.detail_meta.configure(text="\n".join(bits))
 
-        # Reviewed/Revisit button reflects the row's reviewed state
+        # Context-aware buttons across New / Old / Reviewed / To Apply / Follow Up / Archived.
         self._set_primary_button(
             to_apply=bool(job.get("to_apply")),
             reviewed=bool(job.get("reviewed")),
+            applied=bool(applied_at),
+            archived=archived,
         )
+
+        # Show the follow-up date edit button only for Follow Up rows.
+        if applied_at and not archived:
+            pretty = follow_up_at[:10] if follow_up_at else "—"
+            self.follow_up_edit_btn.configure(
+                text=f"\u270E  Edit follow-up date ({pretty})"
+            )
+            self.follow_up_edit_btn.grid(
+                row=5, column=0, sticky="w",
+                padx=10, pady=(0, 6),
+            )
+        else:
+            self.follow_up_edit_btn.grid_remove()
 
         # Matched-keyword chips
         for w in self.chips_frame.winfo_children():
@@ -846,17 +1070,44 @@ class JobScannerApp(ctk.CTk):
                 messagebox.showerror("Open URL failed", str(exc),
                                      parent=self)
 
+    def _open_follow_up_editor(self) -> None:
+        """Open the date-edit Toplevel for the currently selected job.
+
+        Shown only for Follow Up rows (i.e. ``applied_at IS NOT NULL AND NOT archived``).
+        """
+        if not self._detail_job_id:
+            return
+        current = db.get_job(self._detail_job_id, self.db_path) or {}
+        if not current.get("applied_at") or current.get("archived"):
+            return
+        initial = (current.get("follow_up_at") or "")[:10]  # YYYY-MM-DD
+        FollowUpDateEditor(self, self._detail_job_id, initial,
+                           on_save=self._refresh_table)
+
     def _on_primary_toggle(self) -> None:
         if not self._detail_job_id:
             return
         try:
             current = db.get_job(self._detail_job_id, self.db_path) or {}
-            if current.get("to_apply"):
+            applied = bool(current.get("applied_at"))
+            archived = bool(current.get("archived"))
+            to_apply = bool(current.get("to_apply"))
+            reviewed = bool(current.get("reviewed"))
+
+            if to_apply:
                 db.mark_applied(self._detail_job_id, self.db_path)
+            elif applied and not archived:
+                # Follow Up section.
+                db.mark_further_follow_up(self._detail_job_id,
+                                           path=self.db_path)
+            elif archived:
+                # Archived section.
+                db.unarchive_job(self._detail_job_id, self.db_path)
             else:
+                # New / Old / Reviewed.
                 db.set_reviewed(
                     self._detail_job_id,
-                    not bool(current.get("reviewed")),
+                    not reviewed,
                     self.db_path,
                 )
         except Exception as exc:
@@ -864,32 +1115,78 @@ class JobScannerApp(ctk.CTk):
             return
         self._refresh_table()
 
-    def _on_to_apply_toggle(self) -> None:
+    def _on_secondary_toggle(self) -> None:
+        """Context-aware secondary button:
+          - To Apply job → remove from To Apply
+          - Follow Up job → archive
+          - Archived job → hidden / disabled
+          - Reviewed job → disabled (can't re-add reviewed to To Apply)
+          - New / Old job → toggle To Apply
+        """
         if not self._detail_job_id:
             return
         try:
             current = db.get_job(self._detail_job_id, self.db_path) or {}
-            if current.get("reviewed"):
-                # Cannot add a reviewed job to To Apply.
-                return
-            db.set_to_apply(
-                self._detail_job_id,
-                not bool(current.get("to_apply")),
-                self.db_path,
-            )
+            applied = bool(current.get("applied_at"))
+            archived = bool(current.get("archived"))
+            to_apply = bool(current.get("to_apply"))
+            reviewed = bool(current.get("reviewed"))
+
+            if to_apply:
+                db.set_to_apply(self._detail_job_id, False, self.db_path)
+            elif applied and not archived:
+                db.archive_job(self._detail_job_id, self.db_path)
+            elif archived:
+                return  # disabled
+            elif reviewed:
+                return  # disabled
+            else:
+                db.set_to_apply(
+                    self._detail_job_id,
+                    not to_apply,
+                    self.db_path,
+                )
         except Exception as exc:
             messagebox.showerror("Update failed", str(exc))
             return
         self._refresh_table()
 
-    def _set_primary_button(self, to_apply: bool, reviewed: bool) -> None:
+    def _set_primary_button(
+        self,
+        to_apply: bool,
+        reviewed: bool,
+        applied: bool = False,
+        archived: bool = False,
+    ) -> None:
         self.reviewed_var.set(bool(reviewed))
-        if to_apply:
-            # Job is in the To Apply section — primary action is "Mark Applied".
+        if archived:
+            self.reviewed_btn.configure(
+                text="\u21A9 Unarchive",
+                fg_color=("#1f6aa5", "#154a78"),
+                hover_color=("#2680c6", "#1a5a90"),
+                state="normal",
+            )
+            self.to_apply_btn.configure(state="disabled")
+        elif applied:
+            self.reviewed_btn.configure(
+                text="\u21BB Mark Further Follow Up",
+                fg_color=("#0d8050", "#0a6640"),
+                hover_color=("#11965e", "#0d7a4a"),
+                state="normal",
+            )
+            self.to_apply_btn.configure(
+                text="\u2605 Archive",
+                state="normal",
+            )
+        elif to_apply:
             self.reviewed_btn.configure(
                 text="\u2713 Mark Applied",
                 fg_color=("#0d8050", "#0a6640"),
                 hover_color=("#11965e", "#0d7a4a"),
+                state="normal",
+            )
+            self.to_apply_btn.configure(
+                text="\u2605 Remove from To Apply",
                 state="normal",
             )
         elif reviewed:
@@ -899,6 +1196,10 @@ class JobScannerApp(ctk.CTk):
                 hover_color=("#b07a00", "#8a5e00"),
                 state="normal",
             )
+            self.to_apply_btn.configure(
+                text="\u2606 Add to To Apply",
+                state="disabled",
+            )
         else:
             self.reviewed_btn.configure(
                 text="\u2713 Mark Reviewed",
@@ -906,19 +1207,6 @@ class JobScannerApp(ctk.CTk):
                 hover_color=("#2680c6", "#1a5a90"),
                 state="normal",
             )
-
-        # Secondary To Apply toggle.
-        if to_apply:
-            self.to_apply_btn.configure(
-                text="\u2605 Remove from To Apply",
-                state="normal",
-            )
-        elif reviewed:
-            self.to_apply_btn.configure(
-                text="\u2606 Add to To Apply",
-                state="disabled",
-            )
-        else:
             self.to_apply_btn.configure(
                 text="\u2606 Add to To Apply",
                 state="normal",

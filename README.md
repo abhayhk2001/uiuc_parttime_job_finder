@@ -55,13 +55,15 @@ The window is split into three columns:
 | ------------------- | ------------------------- | -------------------------- |
 | New / Old / Reviewed | Sortable, filterable rows  | Job details, Reviewed/Revisit button, matched keywords |
 
-- **Sections sidebar** — four blocks stacked, with live counts:
+- **Sections sidebar** — five blocks stacked, with live counts:
   - **SECTIONS** —
     - **New** — unreviewed jobs **first discovered in the most recent completed scan**. Anything that's already in the DB before the next scan runs is "Old".
     - **Old** — unreviewed jobs that pre-date the current scan (i.e. any non-New unreviewed row).
-    - **Reviewed** — jobs you've already looked at.
-  - **TO APPLY** — jobs you've marked as "I want to apply to this one". Mutually exclusive with New/Old/Reviewed (a job is in exactly one of those four sections, plus ALL). Reviewed jobs cannot be added to To Apply.
-  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply".
+    - **Reviewed** — jobs you've looked at but haven't applied to.
+  - **TO APPLY** — jobs you've flagged as "I want to apply to this one". Reviewed jobs cannot be added.
+  - **FOLLOW UP** — jobs you've marked Applied (with `applied_at` and `follow_up_at` recorded). Sorted by follow-up date ascending so overdue items appear first.
+  - **ARCHIVED** — jobs removed from the VJB listing since the last scan, or jobs you archived manually. Recoverable via Unarchive.
+  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Follow Up Further", "Archive all Follow Up".
   - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`.
 - **Resizable sidebar** — drag the thin sash between the sidebar and the table to widen or narrow it (180px – 700px). The table and detail pane auto-fill the remaining horizontal space. The chosen sidebar width is remembered across launches (stored in the `meta` table under `sash_widths_px`).
 - **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). The *Matched Keywords* and *Posted* columns were intentionally removed; keywords are shown as chips in the detail pane and `date_posted` was rarely populated by the source site.
@@ -88,16 +90,48 @@ The window is split into three columns:
 
   The First/Last seen timestamps are intentionally hidden — they're internal bookkeeping and not user-facing.
 
-### To Apply state machine
+### To Apply / Follow Up / Archive state machine
 
 ```
-   New ───────────► To Apply ────────► Reviewed
-   Old ────────► (Add to To Apply)  (Mark Applied)
+   New ───────────► To Apply ─────────► Follow Up ─────────► Archived
+   Old ────────► (Add to To Apply)  (Mark Applied)       (Archive)
+                  ↓                      ↓                  ↑
+                  ↓  (Mark Applied)      ↓ (Mark Further     ↑ (Unarchive)
+                  ↓                      ↓  Follow Up)        ↑
+                  ↓                      ↓                  ↑ (auto-archive
+                  ↓                      ↓                  ↑  if VJB listing
+                  ↓                      ↓                  ↑  gone on next
+                  ↓                      ↓                  ↑  scan)
    Reviewed ──── (Revisit) ────►  New / Old   (to_apply stays 0)
-   To Apply ──── (Remove)   ────►  New / Old   (to_apply → 0)
+   Follow Up ── (Mark Further Follow Up) ──► Follow Up   (resets follow_up_at)
+   Follow Up ── (Archive)        ──► Archived
+   Archived ──── (Unarchive)     ──► Follow Up or Reviewed (whichever applied_at dictates)
+   Any active section ── (next scan, last_seen_at < cutoff) ──► Archived (auto)
 ```
 
-The four user actions — Add to To Apply / Remove from To Apply / Mark Applied / Mark Reviewed / Revisit — are all silent; they update the DB and the row silently re-buckets.
+All transitions are silent — the DB updates and the row re-buckets without toasts or sounds.
+
+### Follow Up workflow
+
+When you click **Mark Applied** (in the To Apply section), the app records:
+- `applied_at = now`
+- `follow_up_at = applied_at + FOLLOW_UP_WINDOW_DAYS` (default 7 days, configurable in `config.py`)
+
+The job moves from **To Apply** to **Follow Up**.
+
+In the **Follow Up** section, the detail pane shows:
+- "Applied: 2026-09-23"
+- "Follow up: 2026-09-30 (in 7 days)"
+
+Click **✎ Edit follow-up date** to open the date editor. Preset buttons (+1d / +3d / +1w / +2w / +1mo / +3mo) plus a custom `YYYY-MM-DD` entry are both available.
+
+The **Mark Further Follow Up** primary button resets `follow_up_at = now + 7d` — for the common "I followed up today, remind me in a week" flow.
+
+The **Archive** secondary button moves the job to **Archived**.
+
+### Auto-archive
+
+After every successful `python main.py` scan, the app runs `db.auto_archive_removed_jobs(cutoff)` which archives any *active* job (reviewed OR to-apply OR in Follow Up) whose `last_seen_at` is older than the current scan cutoff — i.e. it disappeared from the VJB listing. Active jobs you can no longer apply to or follow up on get archived automatically. Use **Unarchive** to bring one back.
 - **Free-text search** filters the currently selected section across title, company, description, requirements, skills, and matched keywords.
 - **"Matches only" toggle** hides non-matching rows inside the current section.
 - **"Run Scan"** runs the scanner in a background thread; live logs stream into a collapsible log console at the bottom of the window. The button is disabled while a scan is in flight. A successful scan advances the "New" cutoff — see the schema section.
@@ -159,6 +193,10 @@ Created automatically; idempotent migrations add the `reviewed` and `to_apply` c
 | `matched_keywords`| TEXT | Comma-separated lowercase keywords.              |
 | `reviewed`        | INT  | 0 or 1; managed by the GUI.                      |
 | `to_apply`        | INT  | 0 or 1; user-marked "I want to apply". Toggled from the detail pane. Migration adds this. |
+| `applied_at`      | TEXT | ISO timestamp set by `mark_applied`. Migration adds this. |
+| `follow_up_at`    | TEXT | ISO timestamp; default = `applied_at + FOLLOW_UP_WINDOW_DAYS`. User-editable from the detail pane. |
+| `archived`        | INT  | 0 or 1; auto-archived when the VJB listing no longer contains the job, or manually via the Archive button. Migration adds this. |
+| `archived_at`     | TEXT | ISO timestamp set when `archived` becomes 1. |
 
 ### `meta` table
 

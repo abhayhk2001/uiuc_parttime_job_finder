@@ -121,6 +121,11 @@ def run(dry_run: bool = False, verbose: bool = False, fetch_missing: bool = True
 
     alerter.alert(match_jobs)
 
+    # Auto-archive any active job that wasn't re-seen in this scan.
+    n_archived = db.auto_archive_removed_jobs(scan_started_at)
+    if n_archived:
+        print(f"[done] Auto-archived {n_archived} job(s) no longer on VJB.")
+
     total = len(rows)
     print(f"[done] {total} total | {len(new_rows)} new | {len(match_jobs)} new matching.")
     return 0

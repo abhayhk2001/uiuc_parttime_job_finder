@@ -19,6 +19,10 @@ REQUEST_DELAY_SECONDS = 1.0
 HTTP_TIMEOUT_SECONDS = 30
 MAX_RETRIES = 3
 
+# When a job is marked Applied (via mark_applied), record `applied_at` and
+# default `follow_up_at = applied_at + FOLLOW_UP_WINDOW_DAYS`.
+FOLLOW_UP_WINDOW_DAYS = 7
+
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "

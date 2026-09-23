@@ -11,7 +11,7 @@ import sqlite3
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import db  # noqa: E402
+import config  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +293,226 @@ def test_sash_widths_round_trip() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Follow Up / Archived
+# ---------------------------------------------------------------------------
+
+def test_mark_applied_records_timestamps() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(
+            {"job_id": "FA1", "title": "FA", "company": "",
+             "date_posted": "", "detail_url": ""},
+            path=p,
+        )
+        db.set_to_apply("FA1", True, p)
+        # `now_iso()` truncates to second precision — match that here so the
+        # range check is meaningful.
+        before = datetime.now(timezone.utc).replace(microsecond=0)
+        db.mark_applied("FA1", p)
+        after = datetime.now(timezone.utc).replace(microsecond=0)
+        row = db.get_job("FA1", p)
+        # applied_at must parse as a UTC ISO timestamp between before & after.
+        applied_at = datetime.fromisoformat(row["applied_at"])
+        _check(before <= applied_at <= after,
+               f"applied_at {row['applied_at']} out of range")
+        # follow_up_at must be applied_at + FOLLOW_UP_WINDOW_DAYS.
+        follow_up_at = datetime.fromisoformat(row["follow_up_at"])
+        delta = follow_up_at - applied_at
+        _eq(delta.days, config.FOLLOW_UP_WINDOW_DAYS,
+            "follow_up_at should be applied_at + window")
+        # Flag flags flipped.
+        _check(row["to_apply"] == 0, "to_apply should be 0")
+        _check(row["reviewed"] == 1, "reviewed should be 1")
+        _check(row["archived"] == 0, "archived should be 0")
+
+
+def test_mark_further_follow_up_resets_clock() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(
+            {"job_id": "FF1", "title": "FF", "company": "",
+             "date_posted": "", "detail_url": ""},
+            path=p,
+        )
+        # Set a known past follow_up_at.
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET reviewed = 1, applied_at = '2025-01-01T00:00:00+00:00', "
+                "follow_up_at = '2025-01-08T00:00:00+00:00' WHERE job_id = 'FF1'"
+            )
+            conn.commit()
+        before = datetime.now(timezone.utc).replace(microsecond=0)
+        db.mark_further_follow_up("FF1", path=p)
+        after = datetime.now(timezone.utc).replace(microsecond=0)
+        # follow_up_at should be `before + FOLLOW_UP_WINDOW_DAYS` (truncated to seconds).
+        expected_low = (before + timedelta(days=config.FOLLOW_UP_WINDOW_DAYS))
+        expected_high = (after + timedelta(days=config.FOLLOW_UP_WINDOW_DAYS))
+        new_fu = datetime.fromisoformat(db.get_job("FF1", p)["follow_up_at"])
+        _check(expected_low <= new_fu <= expected_high,
+               f"follow_up_at {new_fu.isoformat()} not in "
+               f"[{expected_low.isoformat()}, {expected_high.isoformat()}]")
+
+
+def test_archive_and_unarchive_round_trip() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(
+            {"job_id": "AR1", "title": "AR", "company": "",
+             "date_posted": "", "detail_url": ""},
+            path=p,
+        )
+        db.set_reviewed("AR1", True, p)
+        db.archive_job("AR1", p)
+        row = db.get_job("AR1", p)
+        _check(row["archived"] == 1, "archived flag should be set")
+        _check(bool(row["archived_at"]), "archived_at should be populated")
+        _check(db.get_section_counts(p)["archived"] == 1,
+               "AR1 should appear in Archived section")
+        # Unarchive.
+        db.unarchive_job("AR1", p)
+        row = db.get_job("AR1", p)
+        _check(row["archived"] == 0, "archived should be cleared")
+        _check(row["archived_at"] is None, "archived_at should be NULL")
+        _check(db.get_section_counts(p)["reviewed"] == 1,
+               "AR1 should return to Reviewed section")
+
+
+def test_section_predicates_isolate_follow_up_and_archived() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("A", "B", "C", "D"):
+            db.upsert_listing(
+                {"job_id": jid, "title": jid, "company": "",
+                 "date_posted": "", "detail_url": ""},
+                path=p,
+            )
+        db.set_reviewed("A", True, p)            # in Reviewed
+        db.mark_applied("B", p) if False else None  # marker; mark below
+        # B: in To Apply → mark applied → Follow Up
+        db.set_to_apply("B", True, p)
+        db.mark_applied("B", p)
+        # C: archive directly
+        db.set_reviewed("C", True, p)
+        db.archive_job("C", p)
+        # D: stay unreviewed
+        # Force cutoff to future so D is in Old.
+        db.set_latest_scan_started_at("2099-01-01T00:00:00+00:00", p)
+
+        counts = db.get_section_counts(p)
+        _eq(counts["reviewed"], 1, "A should be the only Reviewed row")
+        _eq(counts["follow_up"], 1, "B should be in Follow Up")
+        _eq(counts["archived"], 1, "C should be in Archived")
+
+        fu_rows = db.get_jobs_by_section(db.SECTION_FOLLOW_UP, path=p)
+        _eq([r["job_id"] for r in fu_rows], ["B"],
+            "Follow Up should list only B")
+
+        ar_rows = db.get_jobs_by_section(db.SECTION_ARCHIVED, path=p)
+        _eq([r["job_id"] for r in ar_rows], ["C"],
+            "Archived should list only C")
+
+        # Follow Up orders by follow_up_at ASC (overdue first); B has future
+        # follow_up_at so it's the only row.
+        _check(fu_rows[0]["job_id"] == "B", "expected B to be in Follow Up")
+
+        # Archived orders by archived_at DESC.
+        _check(ar_rows[0]["job_id"] == "C", "expected C to be in Archived")
+
+
+def test_auto_archive_removed_jobs_archives_only_active_rows() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("A", "B", "C", "D"):
+            db.upsert_listing(
+                {"job_id": jid, "title": jid, "company": "",
+                 "date_posted": "", "detail_url": ""},
+                path=p,
+            )
+        # Pin all rows to an old last_seen_at.
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET last_seen_at = '2020-01-01T00:00:00+00:00'"
+            )
+            conn.commit()
+        # Mark some as active.
+        db.set_reviewed("A", True, p)
+        db.set_to_apply("B", True, p)
+        db.mark_applied("C", p)  # also reviewed=1, applied, in Follow Up
+        # D stays unreviewed (in New/Old).
+
+        cutoff = "2026-09-23T00:00:00+00:00"  # newer than last_seen_at
+        archived_n = db.auto_archive_removed_jobs(cutoff, p)
+        _eq(archived_n, 3, "A, B, C should auto-archive; D stays unreviewed")
+
+        rows = {r["job_id"]: r for r in db.get_all_jobs(p)}
+        _check(rows["A"]["archived"] == 1, "A should be archived")
+        _check(rows["B"]["archived"] == 1, "B should be archived")
+        _check(rows["C"]["archived"] == 1, "C should be archived")
+        _check(rows["D"]["archived"] == 0, "D should NOT be archived")
+
+        # No-op when cutoff is empty.
+        _eq(db.auto_archive_removed_jobs("", p), 0,
+            "empty cutoff should be a no-op")
+
+
+def test_bulk_follow_up_actions() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("F1", "F2", "F3", "RX"):
+            db.upsert_listing(
+                {"job_id": jid, "title": jid, "company": "",
+                 "date_posted": "", "detail_url": ""},
+                path=p,
+            )
+        db.mark_applied("F1", p)
+        db.mark_applied("F2", p)
+        db.mark_applied("F3", p)
+        # RX is reviewed but never applied.
+        db.set_reviewed("RX", True, p)
+        # Pin F1 follow_up_at to a known value so we can detect the reset.
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET follow_up_at = '2020-01-01T00:00:00+00:00' "
+                "WHERE job_id = 'F1'"
+            )
+            conn.commit()
+
+        before = datetime.now(timezone.utc).replace(microsecond=0)
+        n = db.bulk_mark_further_follow_up(db.SECTION_FOLLOW_UP, path=p)
+        after = datetime.now(timezone.utc).replace(microsecond=0)
+        _eq(n, 3, "all three Follow Up rows should be updated")
+
+        expected_low = (before + timedelta(days=config.FOLLOW_UP_WINDOW_DAYS))
+        expected_high = (after + timedelta(days=config.FOLLOW_UP_WINDOW_DAYS))
+        new_fu = datetime.fromisoformat(db.get_job("F1", p)["follow_up_at"])
+        _check(expected_low <= new_fu <= expected_high,
+               f"follow_up_at {new_fu.isoformat()} not in range")
+
+        # Archive all Follow Up.
+        n = db.bulk_archive_section(db.SECTION_FOLLOW_UP, p)
+        _eq(n, 3, "3 Follow Up rows should be archived")
+        _eq(db.get_section_counts(p)["archived"], 3,
+            "all 3 should land in Archived")
+        _eq(db.get_section_counts(p)["follow_up"], 0,
+            "Follow Up section should be empty")
+
+
+def test_set_follow_up_overrides_default() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(
+            {"job_id": "SF1", "title": "SF", "company": "",
+             "date_posted": "", "detail_url": ""},
+            path=p,
+        )
+        db.mark_applied("SF1", p)
+        db.set_follow_up("SF1", "2099-12-31T00:00:00+00:00", p)
+        row = db.get_job("SF1", p)
+        _eq(row["follow_up_at"], "2099-12-31T00:00:00+00:00",
+            "explicit set_follow_up should override default")
+
+
+# ---------------------------------------------------------------------------
 # Test runner (no pytest required)
 # ---------------------------------------------------------------------------
 
@@ -308,6 +529,13 @@ def _run_all() -> tuple[int, int]:
         test_backup_and_restore_round_trip,
         test_prune_keeps_most_recent_n,
         test_sash_widths_round_trip,
+        test_mark_applied_records_timestamps,
+        test_mark_further_follow_up_resets_clock,
+        test_archive_and_unarchive_round_trip,
+        test_section_predicates_isolate_follow_up_and_archived,
+        test_auto_archive_removed_jobs_archives_only_active_rows,
+        test_bulk_follow_up_actions,
+        test_set_follow_up_overrides_default,
     ]
     passed = 0
     failed = 0
