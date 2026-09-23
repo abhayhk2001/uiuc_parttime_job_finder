@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
-import config
+from jobscanner import config
 
 
 def _format_match_row(job: dict) -> str:

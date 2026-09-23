@@ -1,11 +1,10 @@
-import re
 import time
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 
-import config
+from jobscanner import config
 
 
 class VJBError(Exception):

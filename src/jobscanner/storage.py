@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
-import config
+from jobscanner import config
 
 
 SCHEMA = """

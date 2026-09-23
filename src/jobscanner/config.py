@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 BASE_URL = "https://secure.osfa.illinois.edu/vjb"
@@ -9,7 +8,8 @@ SECTION = "nonfws"
 BTN_NAME = "ctl00$ContentPlaceHolder1$btnnonfws"
 BTN_VALUE = "Show University Positions"
 
-ROOT_DIR = Path(__file__).resolve().parent
+# Repo root: src/jobscanner/config.py -> src/jobscanner -> src -> <repo>
+ROOT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT_DIR / "data"
 DB_PATH = DATA_DIR / "jobs.db"
 

@@ -1,10 +1,9 @@
 import re
 from typing import Optional
-from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag
 
-import config
+from jobscanner import config
 
 
 _WS_RE = re.compile(r"\s+")

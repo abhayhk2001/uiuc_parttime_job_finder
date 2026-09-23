@@ -3,7 +3,8 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-import config
+from jobscanner import config
+from jobscanner import storage as db
 
 
 def load_keywords(path: Path = config.KEYWORDS_PATH) -> list[str]:
@@ -45,8 +46,6 @@ def rematch_all(keywords: list[str]) -> int:
     Returns the number of job rows updated. Used by the GUI keyword editor
     so the table refreshes immediately when keywords change.
     """
-    import db
-
     rows = db.get_all_jobs()
     updated = 0
     for row in rows:
