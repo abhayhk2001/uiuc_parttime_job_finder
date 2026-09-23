@@ -19,6 +19,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Or install the package itself, which also puts a `jobscanner` command on your
+PATH:
+
+```bash
+pip install -e .
+jobscanner --no-gui
+```
+
 ## Run
 
 ```bash
@@ -28,7 +36,12 @@ python main.py --dry-run  # parse but don't write to DB
 python main.py --no-gui   # scan only, no GUI (use for cron)
 python main.py --gui-only # open the GUI without scanning
 python gui.py             # launch GUI directly (loads existing DB)
+jobscanner --no-gui       # same as `python main.py --no-gui`, if pip-installed
 ```
+
+`main.py` and `gui.py` at the repo root are thin shims over
+`jobscanner.cli:main` and `jobscanner.ui.app:launch`, so every command above
+works whether or not the package is installed.
 
 On first run the bot creates `data/jobs.db`. On subsequent runs it detects new postings (anything whose `Job ID` isn't already in the DB) and only fetches details for those — plus any older rows still missing detail text.
 
@@ -37,37 +50,44 @@ When run interactively, `python main.py` performs the scan and then opens the GU
 ## Data flow
 
 ```
-[ VJB web site ] ──(requests)──► fetcher ──(BeautifulSoup)──► parser
-                                                                  │
-              ▼                                                    ▼
-       alerter (sound/console)                              db (SQLite)
-              ▲                                                    │
-              └────────────── matcher ◄──── keywords.json ◄────────┘
-                                   │
-                                   └─► gui (CustomTkinter)
+[ VJB web site ] ──(requests)──► scraper.session ──(BeautifulSoup)──► scraper.parsing
+                                                                           │
+              ▼                                                             ▼
+       alerts (sound/console)                                        storage (SQLite)
+              ▲                                                             │
+              └──────────────── matching ◄──── keywords.json ◄─────────────┘
+                                    │
+                                    └─► ui (CustomTkinter)
+
+              cli ──► pipeline ──► everything above
 ```
 
 ## GUI features
 
-The window is split into three columns:
+The window is split into three columns, separated by two draggable dividers:
 
 | Sections sidebar    | Jobs table                | Detail pane                |
 | ------------------- | ------------------------- | -------------------------- |
-| New / Old / Reviewed | Sortable, filterable rows  | Job details, Reviewed/Revisit button, matched keywords |
+| All / New / Old / Reviewed | Sortable, filterable rows  | Job details, context-aware action buttons, matched keywords |
 
 - **Sections sidebar** — five blocks stacked, with live counts:
   - **SECTIONS** —
+    - **All** — every row in the database, so free-text search can span sections.
     - **New** — unreviewed jobs **first discovered in the most recent completed scan**. Anything that's already in the DB before the next scan runs is "Old".
     - **Old** — unreviewed jobs that pre-date the current scan (i.e. any non-New unreviewed row).
     - **Reviewed** — jobs you've looked at but haven't applied to.
   - **TO APPLY** — jobs you've flagged as "I want to apply to this one". Reviewed jobs cannot be added.
   - **FOLLOW UP** — jobs you've marked Applied (with `applied_at` and `follow_up_at` recorded). Sorted by follow-up date ascending so overdue items appear first.
   - **ARCHIVED** — jobs removed from the VJB listing since the last scan, or jobs you archived manually. Recoverable via Unarchive.
-  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Follow Up Further", "Archive all Follow Up".
+  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Follow Up Further", "Archive all Follow Up". Each button is enabled only when its section has rows. The four destructive ones (revisit all, apply all, unmark all, archive all) ask for confirmation first; every one reports its result as a status-bar toast that fades after a few seconds rather than a modal dialog.
   - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`.
-- **Resizable sidebar** — drag the thin sash between the sidebar and the table to widen or narrow it (180px – 700px). The table and detail pane auto-fill the remaining horizontal space. The chosen sidebar width is remembered across launches (stored in the `meta` table under `sash_widths_px`).
+- **Resizable, collapsible sidebar** — drag the sash between the sidebar and the table to resize it (180px – 700px). Collapse it to a 58px rail with the `«` button in its header, by double-clicking the sash, or with `Cmd/Ctrl-B`; the rail keeps every section's short label and live count. Expanding restores the width you last dragged to.
+- **Resizable detail pane** — a second sash sits between the table and the detail pane. Detail text reflows to the pane's width as you drag.
+- **Remembered layout** — sidebar width, collapsed state and detail width are saved on every drag release and on collapse (not just at exit), under the `ui_layout` key in the `meta` table.
 - **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). The *Matched Keywords* and *Posted* columns were intentionally removed; keywords are shown as chips in the detail pane and `date_posted` was rarely populated by the source site.
-- **Sorting**: click any column header to sort. **Matches defaults to descending** (highest match count first); all other columns default to ascending. Click the same header again to flip direction. The chosen sort **persists across refreshes** — toggling Mark Reviewed, Mark Applied, Revisit, or adding/removing from To Apply preserves the user's chosen order. Internally-tracked per column.
+- **Sorting**: click any column header to sort; the active column shows a ▲/▼ arrow. **Matches defaults to descending** (highest match count first) and is applied on open, so the most promising rows are already at the top; all other columns default to ascending. Click the same header again to flip direction. The chosen sort **persists across refreshes** — toggling Mark Reviewed, Mark Applied, Revisit, or adding/removing from To Apply preserves the user's chosen order.
+- **Row actions**: double-click (or press Return on) a row to open the posting in your browser. Right-click a row for a context menu — open, copy Job ID, and the same two state-machine actions the detail pane offers for that row.
+- **Empty sections** say why they're empty, distinguishing "no search matches", "no keyword matches" and a genuinely empty section.
 - **Highlight rules** in the table:
   - Bright green text = matched one or more keywords and is not yet reviewed.
   - Dim green text = matched keywords but already reviewed.
@@ -75,20 +95,41 @@ The window is split into three columns:
   - Default light text = unreviewed, no keyword match.
 - **Detail pane** — per-job, in this order:
   1. **Title + job ID**.
-  2. **VJB URL on its own line** — blue, single-clickable, opens in the default browser (cursor turns to a hand on hover).
-  3. **Company**.
-  4. **Primary action button** — context-aware:
-     - Unreviewed job → **"✓ Mark Reviewed"** (sets reviewed=1).
+  2. **VJB URL on its own line** — blue and clickable, with an explicit **"Open ↗"** button beside it. Both open the default browser; the button is disabled when the row has no usable URL.
+  3. **Company**, plus applied / follow-up / archived dates where they apply.
+  4. **Primary action button** — context-aware, checked in this order:
+     - Archived job → **"↩ Unarchive"**.
+     - Applied job (Follow Up) → **"↻ Mark Further Follow Up"**.
+     - To Apply job → **"✓ Mark Applied"** — atomic transition: clears `to_apply`, sets `reviewed=1`, and records `applied_at` / `follow_up_at`.
      - Reviewed job → **"↻ Revisit"** (clears reviewed, row returns to New/Old).
-     - To Apply job → **"✓ Mark Applied"** — atomic transition: clears `to_apply` AND sets `reviewed=1`.
-  5. **Secondary To Apply toggle**:
-     - `to_apply=0` (and not reviewed) → **"☆ Add to To Apply"** (sets to_apply=1).
-     - `to_apply=1` → **"★ Remove from To Apply"** (clears to_apply).
-     - Already reviewed → button disabled.
+     - Otherwise → **"✓ Mark Reviewed"** (sets reviewed=1).
+  5. **Secondary button**, in the same order:
+     - Archived job → disabled (unarchive it first).
+     - Applied job → **"★ Archive"**.
+     - To Apply job → **"★ Remove from To Apply"**.
+     - Reviewed job → disabled (can't re-add a reviewed job to To Apply).
+     - Otherwise → **"☆ Add to To Apply"**.
   6. **Matched keyword chips**.
   7. **Description / Requirements / Skills** sections.
 
+  Both buttons come from one state machine in `ui/job_actions.py`, so a button's label and what it does can't disagree.
+
   The First/Last seen timestamps are intentionally hidden — they're internal bookkeeping and not user-facing.
+
+### Keyboard shortcuts
+
+`Cmd` on macOS, `Ctrl` elsewhere.
+
+| Shortcut | Action |
+| -------- | ------ |
+| `Cmd-R` | Refresh the table |
+| `Cmd-F` | Focus the search box |
+| `Esc` | Clear the search |
+| `Cmd-L` | Toggle the log console |
+| `Cmd-B` | Collapse / expand the sidebar |
+| `Cmd-Return` | Run a scan |
+| `Cmd-1` … `Cmd-7` | Jump to a section, in sidebar order |
+| `Return` / double-click | Open the selected job in the browser |
 
 ### To Apply / Follow Up / Archive state machine
 
@@ -109,7 +150,7 @@ The window is split into three columns:
    Any active section ── (next scan, last_seen_at < cutoff) ──► Archived (auto)
 ```
 
-All transitions are silent — the DB updates and the row re-buckets without toasts or sounds.
+Single-row transitions are silent — the DB updates and the row re-buckets. Bulk actions report to the status bar, and the destructive ones confirm first.
 
 ### Follow Up workflow
 
@@ -127,6 +168,8 @@ Click **✎ Edit follow-up date** to open the date editor. Preset buttons (+1d /
 
 The **Mark Further Follow Up** primary button resets `follow_up_at = now + 7d` — for the common "I followed up today, remind me in a week" flow.
 
+The bulk **"Mark all To Apply Applied"** action runs exactly the same transition as the single-row button, timestamps included, so bulk-applied jobs land in Follow Up rather than stopping at Reviewed.
+
 The **Archive** secondary button moves the job to **Archived**.
 
 ### Auto-archive
@@ -134,7 +177,7 @@ The **Archive** secondary button moves the job to **Archived**.
 After every successful `python main.py` scan, the app runs `db.auto_archive_removed_jobs(cutoff)` which archives any *active* job (reviewed OR to-apply OR in Follow Up) whose `last_seen_at` is older than the current scan cutoff — i.e. it disappeared from the VJB listing. Active jobs you can no longer apply to or follow up on get archived automatically. Use **Unarchive** to bring one back.
 - **Free-text search** filters the currently selected section across title, company, description, requirements, skills, and matched keywords.
 - **"Matches only" toggle** hides non-matching rows inside the current section.
-- **"Run Scan"** runs the scanner in a background thread; live logs stream into a collapsible log console at the bottom of the window. The button is disabled while a scan is in flight. A successful scan advances the "New" cutoff — see the schema section.
+- **"Run Scan"** runs the scanner in a background thread; live logs stream into a collapsible log console at the bottom of the window. Output produced while the console is collapsed is buffered and replayed when you open it. The button is disabled while a scan is in flight. A successful scan advances the "New" cutoff — see the schema section.
 - **"Edit Keywords…"** opens an in-app editor for `keywords.json`. On Save it re-matches every existing row so the table refreshes immediately. The `Reviewed` flag is preserved across keyword edits — re-matching never silently re-classifies a job.
 - **Status bar** shows total jobs, matching count, and reviewed count.
 
@@ -160,16 +203,42 @@ Notes:
 ## Files
 
 ```
-main.py        orchestration / CLI entry; auto-opens GUI on success
-gui.py         CustomTkinter GUI (sections, table, details, scan, log, keyword editor)
-config.py      URLs, paths, headers, delays
-fetcher.py     ASP.NET WebForms session (GET home, POST listing, GET detail)
-parser.py      HTML → dict (listing rows + detail rows)
-db.py          SQLite layer, schema with job_id PRIMARY KEY + `reviewed` flag + `meta` table
-matcher.py     case-insensitive keyword matching + rematch_all
-alerter.py     macOS sound + console summary (V2: WhatsApp bot)
-keywords.json  your editable skill/keyword list
-data/jobs.db   produced on first run
+pyproject.toml            packaging; defines the `jobscanner` console script
+main.py                   shim -> jobscanner.cli:main
+gui.py                    shim -> jobscanner.ui.app:launch
+keywords.json             your editable skill/keyword list
+data/jobs.db              produced on first run
+
+src/jobscanner/
+  config.py               URLs, paths, headers, delays
+  timeutils.py            the one place UTC ISO-8601 is produced or parsed
+  cli.py                  argparse entry point; decides whether to open the GUI
+  pipeline.py             a scan: fetch, diff, backfill, match, alert, auto-archive
+  matching.py             case-insensitive keyword matching + rematch_all
+  alerts.py               macOS sound + console summary (V2: WhatsApp bot)
+  scraper/
+    session.py            ASP.NET WebForms session (GET home, POST listing, GET detail)
+    parsing.py            HTML -> dict (listing rows + detail rows)
+  storage/                SQLite layer; __init__ re-exports the whole API
+    schema.py             tables, connection helper, idempotent migrations
+    meta.py               the key/value meta table (scan cutoff, UI layout)
+    sections.py           one registry defining what each section means in SQL
+    jobs.py               row reads/writes and the state transitions
+    backup.py             pre-scan snapshots of the DB file
+  ui/
+    app.py                the window shell, scan thread, shortcuts, context menu
+    theme.py              every color, font and spacing token
+    job_actions.py        the job state machine (no Tk imports)
+    bulk_actions.py       the bulk-action registry
+    toolbar.py            scan/refresh/search/filters/status + toasts
+    sidebar.py            sections, counts, bulk actions, keywords, collapse
+    jobs_table.py         the Treeview, row tagging, sorting, empty state
+    detail_pane.py        the selected job and its context-aware buttons
+    log_console.py        the stdout shim and the collapsible log
+    sash.py               reusable draggable divider
+    dialogs/              keyword editor, follow-up date editor
+
+tests/test_db_isolated.py smoke tests for the storage layer (temp DBs only)
 ```
 
 ## Database schema
@@ -202,7 +271,7 @@ Created automatically; idempotent migrations add the `reviewed` and `to_apply` c
 
 | Column  | Type | Notes                                                            |
 | ------- | ---- | ---------------------------------------------------------------- |
-| `key`   | TEXT | Primary key. Used for `latest_scan_started_at` (ISO timestamp at the start of the latest successful scan — drives the New/Old boundary) and `sash_widths_px` (JSON list persisting the sidebar width between launches). |
+| `key`   | TEXT | Primary key. Used for `latest_scan_started_at` (ISO timestamp at the start of the latest successful scan — drives the New/Old boundary), `ui_layout` (JSON object: sidebar width, collapsed flag, detail width) and the older `sash_widths_px` (JSON list; still read once to seed `ui_layout` when upgrading a pre-existing DB). |
 | `value` | TEXT | String payload — see above. |
 
 ## Editing keywords
@@ -241,17 +310,29 @@ The backup files are excluded from git via `.gitignore`.
 
 ### Why this exists
 
-A scan writes to the DB in several places (`init_db` migrations, `upsert_listing`, `update_details`, `set_latest_scan_started_at`). The backups exist so that if any of those writes ever corrupt or wipe state, you can roll back to the previous scan's snapshot with a single copy. The functions live in `db.backup_db()` and `db.prune_old_backups()`.
+A scan writes to the DB in several places (`init_db` migrations, `upsert_listing`, `update_details`, `set_latest_scan_started_at`). The backups exist so that if any of those writes ever corrupt or wipe state, you can roll back to the previous scan's snapshot with a single copy. The functions live in `jobscanner/storage/backup.py`.
+
+## Tests
+
+```bash
+python tests/test_db_isolated.py    # no pytest needed
+pytest tests/test_db_isolated.py    # also works
+```
+
+Smoke tests for the storage layer. Every test runs against its own
+`tempfile.mkdtemp()` database and never touches `data/jobs.db` — any new test
+in this repo should mirror that pattern.
 
 ## Troubleshooting
 
-- **"ModuleNotFoundError: No module named 'customtkinter'"** — you ran the GUI in an environment that didn't install all of `requirements.txt`. Re-run `pip install -r requirements.txt`.
+- **"ModuleNotFoundError: No module named 'customtkinter'"** — you ran the GUI in an environment that didn't install all of `requirements.txt`. Re-run `pip install -r requirements.txt`. The CLI itself does not need it: `jobscanner.cli` imports the GUI lazily, so a headless box can run scans without Tk.
+- **"ModuleNotFoundError: No module named 'jobscanner'"** — you imported the package directly without installing it. Either `pip install -e .`, or go through the `main.py` / `gui.py` shims, which add `src/` to `sys.path` themselves.
 - **`_tkinter.TclError: ... no display`** — invoked the GUI in a context without a display (cron, SSH without X-forwarding, etc.). Use `--no-gui` or `python main.py --gui-only` from your own terminal.
-- **Scan hangs on the network** — `fetcher.py` retries up to 3× with a 1 s base delay (`config.MAX_RETRIES`, `config.REQUEST_DELAY_SECONDS`). Persistent failures raise `fetcher.VJBError`, which `main.py` surfaces as `[fatal] ...` and returns exit code 2.
+- **Scan hangs on the network** — `scraper/session.py` retries up to 3× with a 1 s base delay (`config.MAX_RETRIES`, `config.REQUEST_DELAY_SECONDS`). Persistent failures raise `VJBError`, which `cli.py` surfaces as `[fatal] ...` and returns exit code 2.
 
 ## Notes
 
 - Site is ASP.NET WebForms (server-rendered). No headless browser needed.
-- `fetcher.py` uses a polite 1 s delay between requests — see `config.REQUEST_DELAY_SECONDS`.
-- The bot is structured so a future WhatsApp alerter can replace `alerter.py`'s `alert()` body without touching the rest of the code.
+- `scraper/session.py` uses a polite 1 s delay between requests — see `config.REQUEST_DELAY_SECONDS`.
+- The bot is structured so a future WhatsApp alerter can replace `alerts.py`'s `alert()` body without touching the rest of the code.
 - Matching is intentionally simple (case-insensitive whole-word-ish substring), so a keyword like `python` matches both `Python Developer` and `pythonic-style work`. Tighten keywords to reduce false positives if needed.
