@@ -38,12 +38,18 @@ _SCAN_DONE = "__SCAN_DONE__"
 #: Write chunks retained for the collapsed log console.
 _LOG_BUFFER_CHUNKS = 2000
 
-# Root grid columns.
+# Root grid columns. The table is the only weighted one, so it absorbs any
+# slack; the sidebar and detail pane keep the widths the sashes give them.
 _COL_SIDEBAR = 0
-_COL_SASH = 1
+_COL_SIDEBAR_SASH = 1
 _COL_TABLE = 2
-_COL_DETAIL = 3
-_COL_COUNT = 4
+_COL_DETAIL_SASH = 3
+_COL_DETAIL = 4
+_COL_COUNT = 5
+
+MIN_TABLE_WIDTH = 420
+MIN_DETAIL_WIDTH = 300
+MAX_DETAIL_WIDTH = 900
 
 
 class JobScannerApp(ctk.CTk):
@@ -65,10 +71,19 @@ class JobScannerApp(ctk.CTk):
         self.geometry("1380x860")
         self.minsize(1080, 640)
 
+        self._layout = db.get_layout(self.db_path)
+        self._detail_width = int(self._layout["detail_width"])
+
         self.grid_columnconfigure(_COL_SIDEBAR, weight=0)
-        self.grid_columnconfigure(_COL_SASH, weight=0)
-        self.grid_columnconfigure(_COL_TABLE, weight=2)
-        self.grid_columnconfigure(_COL_DETAIL, weight=2)
+        self.grid_columnconfigure(_COL_SIDEBAR_SASH, weight=0)
+        self.grid_columnconfigure(_COL_TABLE, weight=1,
+                                  minsize=MIN_TABLE_WIDTH)
+        self.grid_columnconfigure(_COL_DETAIL_SASH, weight=0)
+        # The detail pane is sized explicitly rather than sharing a weight
+        # with the table: the Treeview's natural width is wider than its
+        # fair share, so a weighted split squeezed the detail pane to ~180px.
+        self.grid_columnconfigure(_COL_DETAIL, weight=0,
+                                  minsize=self._detail_width)
         self.grid_rowconfigure(1, weight=1)
 
         self._build_toolbar()
@@ -94,26 +109,35 @@ class JobScannerApp(ctk.CTk):
                           sticky="ew", padx=theme.PAD, pady=(theme.PAD, 4))
 
     def _build_body(self) -> None:
-        saved = db.get_sash_widths(self.db_path)
-        self._sidebar_width = saved[0] if saved else sidebar_mod.DEFAULT_WIDTH
-
         self.sections_panel = sidebar_mod.SectionsPanel(
             self,
             on_select_section=self.select_section,
             on_bulk_action=self.bulk_mark_section,
             on_edit_keywords=self._open_keyword_editor,
+            on_toggle_collapsed=self._on_sidebar_collapsed,
+            width=int(self._layout["sidebar_width"]),
+            collapsed=bool(self._layout["sidebar_collapsed"]),
         )
-        self.sections_panel.configure(width=self._sidebar_width)
         self.sections_panel.grid(row=1, column=_COL_SIDEBAR, sticky="nsew",
                                  padx=(theme.PAD, 0), pady=4)
 
-        self._sash = Sash(
-            self, on_drag=self._drag_sidebar, on_release=self._save_layout)
-        self._sash.grid(row=1, column=_COL_SASH, sticky="ns", pady=4)
+        self.sidebar_sash = Sash(
+            self,
+            on_drag=self._drag_sidebar,
+            on_release=self._save_layout,
+            on_double_click=self.sections_panel.toggle_collapsed,
+        )
+        self.sidebar_sash.grid(row=1, column=_COL_SIDEBAR_SASH,
+                               sticky="ns", pady=4)
 
         self.jobs_table = JobsTable(self, on_select=self._on_select_row)
         self.jobs_table.grid(row=1, column=_COL_TABLE, sticky="nsew",
-                             padx=(0, 4), pady=4)
+                             padx=(0, 0), pady=4)
+
+        self.detail_sash = Sash(
+            self, on_drag=self._drag_detail, on_release=self._save_layout)
+        self.detail_sash.grid(row=1, column=_COL_DETAIL_SASH,
+                              sticky="ns", pady=4)
 
         self.detail = DetailPane(
             self,
@@ -121,7 +145,7 @@ class JobScannerApp(ctk.CTk):
             on_edit_follow_up=self._open_follow_up_editor,
         )
         self.detail.grid(row=1, column=_COL_DETAIL, sticky="nsew",
-                         padx=(4, theme.PAD), pady=4)
+                         padx=(0, theme.PAD), pady=4)
 
     def _build_footer(self) -> None:
         self.footer = ctk.CTkFrame(self)
@@ -137,21 +161,38 @@ class JobScannerApp(ctk.CTk):
         # its own toggle, rather than in a row below the footer entirely.
         self.log_console = LogConsole(self.footer)
 
-    # -- sidebar resize ----------------------------------------------------
+    # -- pane resizing -----------------------------------------------------
 
     def _drag_sidebar(self, delta: int) -> None:
-        width = max(sidebar_mod.MIN_WIDTH,
-                    min(sidebar_mod.MAX_WIDTH, self._sidebar_width + delta))
-        self.sections_panel.configure(width=width)
+        """Dragging the left sash widens the sidebar; it also un-collapses."""
+        if self.sections_panel.collapsed:
+            if delta > 20:
+                self.sections_panel.set_collapsed(False)
+            return
+        self.sections_panel.set_expanded_width(
+            self.sections_panel.expanded_width + delta)
+
+    def _drag_detail(self, delta: int) -> None:
+        """Dragging the right sash left widens the detail pane."""
+        width = max(MIN_DETAIL_WIDTH,
+                    min(MAX_DETAIL_WIDTH, self._detail_width - delta))
+        self.grid_columnconfigure(_COL_DETAIL, minsize=width)
+
+    def _on_sidebar_collapsed(self, collapsed: bool) -> None:
+        self._save_layout()
 
     def _save_layout(self) -> None:
+        """Persist the pane layout. Called on every drag release and on
+        collapse, so a crash can't lose it the way close-only saving did."""
         try:
-            # The configured (requested) width, not winfo_width(), which can
-            # be stale before the widget re-renders.
-            self._sidebar_width = int(self.sections_panel.cget("width") or 0)
-            # Table and detail fill the remaining space proportionally, so
-            # only the sidebar needs persisting.
-            db.set_sash_widths([self._sidebar_width, 0, 0], self.db_path)
+            self._detail_width = int(
+                self.grid_columnconfigure(_COL_DETAIL)["minsize"])
+            self._layout = {
+                "sidebar_width": self.sections_panel.expanded_width,
+                "sidebar_collapsed": self.sections_panel.collapsed,
+                "detail_width": self._detail_width,
+            }
+            db.set_layout(self._layout, self.db_path)
         except Exception:
             pass
 

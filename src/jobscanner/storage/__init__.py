@@ -40,12 +40,16 @@ from jobscanner.storage.jobs import (
     upsert_listing,
 )
 from jobscanner.storage.meta import (
+    DEFAULT_LAYOUT,
     META_KEY_LATEST_SCAN_STARTED_AT,
+    META_KEY_LAYOUT,
     META_KEY_SASH_WIDTHS,
+    get_layout,
     get_latest_scan_started_at,
     get_meta,
     get_sash_widths,
     set_latest_scan_started_at,
+    set_layout,
     set_meta,
     set_sash_widths,
 )
@@ -80,6 +84,7 @@ __all__ = [
     "now_iso", "add_days_iso",
     # meta
     "META_KEY_LATEST_SCAN_STARTED_AT", "META_KEY_SASH_WIDTHS",
+    "META_KEY_LAYOUT", "DEFAULT_LAYOUT", "get_layout", "set_layout",
     "get_meta", "set_meta",
     "get_latest_scan_started_at", "set_latest_scan_started_at",
     "get_sash_widths", "set_sash_widths",
