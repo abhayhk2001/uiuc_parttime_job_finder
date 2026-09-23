@@ -48,12 +48,20 @@ def _sort_key(value: str):
 
 
 class JobsTable(ctk.CTkFrame):
-    def __init__(self, master, on_select: Callable[[Optional[str]], None]) -> None:
+    def __init__(
+        self,
+        master,
+        on_select: Callable[[Optional[str]], None],
+        on_activate: Optional[Callable[[str], None]] = None,
+        on_context_menu: Optional[Callable[[str, int, int], None]] = None,
+    ) -> None:
         super().__init__(master)
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self._on_select = on_select
+        self._on_activate = on_activate
+        self._on_context_menu = on_context_menu
         # Per-column direction for the *next* click. False=ascending.
         self._next_desc: dict[str, bool] = {
             key: key in _DESCENDING_FIRST for key, _, _ in COLUMNS
@@ -73,11 +81,22 @@ class JobsTable(ctk.CTkFrame):
             self.tree.tag_configure(tag, foreground=color)
         self.tree.grid(row=0, column=0, sticky="nsew")
         self.tree.bind("<<TreeviewSelect>>", self._handle_select)
+        self.tree.bind("<Double-Button-1>", self._handle_activate)
+        self.tree.bind("<Return>", self._handle_activate)
+        # Right-click is Button-3 on most platforms and Button-2 on macOS;
+        # Control-click is the macOS trackpad equivalent.
+        for sequence in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
+            self.tree.bind(sequence, self._handle_context_menu)
 
         scrollbar = ttk.Scrollbar(
             self, orient="vertical", command=self.tree.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scrollbar.set)
+
+        # Shown over the tree when the current section has no rows.
+        self._empty_label = ctk.CTkLabel(
+            self, text="", text_color=theme.FAINT_TEXT,
+            font=theme.body_font(13))
 
         theme.style_treeview(self)
 
@@ -99,9 +118,36 @@ class JobsTable(ctk.CTkFrame):
         if job_id and job_id in self.tree.get_children():
             self.tree.selection_set(job_id)
 
+    def move_selection(self, offset: int) -> None:
+        """Move the selection up/down by `offset` rows."""
+        rows = self.tree.get_children()
+        if not rows:
+            return
+        current = self.selected_id()
+        index = rows.index(current) + offset if current in rows else 0
+        index = max(0, min(len(rows) - 1, index))
+        self.tree.selection_set(rows[index])
+        self.tree.focus(rows[index])
+        self.tree.see(rows[index])
+
+    def _handle_activate(self, _event=None) -> None:
+        job_id = self.selected_id()
+        if job_id and self._on_activate is not None:
+            self._on_activate(job_id)
+
+    def _handle_context_menu(self, event):
+        row = self.tree.identify_row(event.y)
+        if not row:
+            return
+        self.tree.selection_set(row)
+        self.tree.focus(row)
+        if self._on_context_menu is not None:
+            self._on_context_menu(row, event.x_root, event.y_root)
+        return "break"
+
     # -- contents ----------------------------------------------------------
 
-    def populate(self, rows: list[dict]) -> None:
+    def populate(self, rows: list[dict], empty_message: str = "") -> None:
         """Replace every row, preserving selection and the active sort."""
         previous = self.selected_id()
 
@@ -128,6 +174,13 @@ class JobsTable(ctk.CTkFrame):
         if previous:
             self.select(previous)
         self._apply_sort()
+
+        # An empty section used to render as a blank grid with no explanation.
+        if rows:
+            self._empty_label.place_forget()
+        else:
+            self._empty_label.configure(text=empty_message or "Nothing here.")
+            self._empty_label.place(relx=0.5, rely=0.45, anchor="center")
 
     # -- sorting -----------------------------------------------------------
 

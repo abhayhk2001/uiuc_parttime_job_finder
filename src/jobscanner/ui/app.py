@@ -13,9 +13,10 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import webbrowser
 from collections import deque
 from pathlib import Path
-from tkinter import messagebox
+from tkinter import Menu, messagebox
 from typing import Optional
 
 import customtkinter as ctk
@@ -91,6 +92,9 @@ class JobScannerApp(ctk.CTk):
         self._build_body()
         self._build_footer()
 
+        self._build_row_menu()
+        self._bind_shortcuts()
+
         self.refresh()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(60, self._drain_log_queue)
@@ -131,7 +135,12 @@ class JobScannerApp(ctk.CTk):
         self.sidebar_sash.grid(row=1, column=_COL_SIDEBAR_SASH,
                                sticky="ns", pady=4)
 
-        self.jobs_table = JobsTable(self, on_select=self._on_select_row)
+        self.jobs_table = JobsTable(
+            self,
+            on_select=self._on_select_row,
+            on_activate=self._open_job_url,
+            on_context_menu=self._show_row_menu,
+        )
         self.jobs_table.grid(row=1, column=_COL_TABLE, sticky="nsew",
                              padx=(0, 0), pady=4)
 
@@ -161,6 +170,74 @@ class JobScannerApp(ctk.CTk):
         # The console is a child of the footer so it opens directly beneath
         # its own toggle, rather than in a row below the footer entirely.
         self.log_console = LogConsole(self.footer)
+
+    # -- shortcuts and context menu ----------------------------------------
+
+    def _bind_shortcuts(self) -> None:
+        """Keyboard access to everything the toolbar and sidebar offer."""
+        accel = "Command" if sys.platform == "darwin" else "Control"
+        bindings = {
+            f"<{accel}-r>": lambda _e: self.refresh(),
+            f"<{accel}-f>": lambda _e: self.toolbar.focus_search(),
+            f"<{accel}-l>": lambda _e: self._toggle_log(),
+            f"<{accel}-b>": lambda _e: self.sections_panel.toggle_collapsed(),
+            f"<{accel}-Return>": lambda _e: self._start_scan(),
+            "<Escape>": lambda _e: self.toolbar.clear_search(),
+        }
+        for sequence, handler in bindings.items():
+            self.bind_all(sequence, handler)
+
+        # Digits jump between sections, in sidebar order.
+        for index, section in enumerate(db.COUNTED_SECTIONS, start=1):
+            if index > 9:
+                break
+            self.bind_all(f"<{accel}-Key-{index}>",
+                          lambda _e, s=section: self.select_section(s))
+
+    def _build_row_menu(self) -> None:
+        self._row_menu = Menu(self, tearoff=0)
+
+    def _show_row_menu(self, job_id: str, x_root: int, y_root: int) -> None:
+        """Right-click menu offering the same actions as the detail pane."""
+        job = db.get_job(job_id, self.db_path)
+        if not job:
+            return
+        state = job_actions.JobState.from_row(job)
+        primary = job_actions.primary_action(state)
+        secondary = job_actions.secondary_action(state)
+
+        menu = self._row_menu
+        menu.delete(0, "end")
+        menu.add_command(
+            label="Open in browser",
+            command=lambda: self._open_job_url(job_id),
+            state="normal" if (job.get("detail_url") or "").startswith("http")
+            else "disabled",
+        )
+        menu.add_command(label="Copy Job ID",
+                         command=lambda: self._copy_to_clipboard(job_id))
+        menu.add_separator()
+        for action in (primary, secondary):
+            menu.add_command(
+                label=action.label,
+                command=lambda op=action.op: self._run_job_op_on(job_id, op),
+                state="normal" if action.enabled and action.op else "disabled",
+            )
+        try:
+            menu.tk_popup(x_root, y_root)
+        finally:
+            menu.grab_release()
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.toolbar.show_toast(f"Copied {text}", self._refresh_status, ms=2500)
+
+    def _open_job_url(self, job_id: str) -> None:
+        job = db.get_job(job_id, self.db_path) or {}
+        url = (job.get("detail_url") or "").strip()
+        if url.startswith(("http://", "https://")):
+            webbrowser.open(url)
 
     # -- pane resizing -----------------------------------------------------
 
@@ -212,13 +289,21 @@ class JobScannerApp(ctk.CTk):
             messagebox.showerror("DB error", f"Could not query DB:\n{exc}")
             return
 
-        self.jobs_table.populate(rows)
+        self.jobs_table.populate(rows, empty_message=self._empty_message())
         self.sections_panel.refresh(
             db.get_section_counts(self.db_path),
             matching.load_keywords(self.keywords_path),
         )
         self._refresh_status()
         self._on_select_row(self.jobs_table.selected_id())
+
+    def _empty_message(self) -> str:
+        """Explain an empty table rather than showing a blank grid."""
+        if self.toolbar.query().strip():
+            return f"No jobs match \u201c{self.toolbar.query().strip()}\u201d here."
+        if self.toolbar.matches_only():
+            return "No keyword matches in this section."
+        return f"Nothing in {db.SECTION_LABELS[self.section_var]}."
 
     def _refresh_status(self, prefix: str = "") -> None:
         try:
@@ -269,7 +354,9 @@ class JobScannerApp(ctk.CTk):
 
     def _run_job_op(self, op: Optional[str]) -> None:
         """Run a primary/secondary detail-pane action on the selected job."""
-        job_id = self.detail.job_id
+        self._run_job_op_on(self.detail.job_id, op)
+
+    def _run_job_op_on(self, job_id: Optional[str], op: Optional[str]) -> None:
         if not op or not job_id:
             return
         try:

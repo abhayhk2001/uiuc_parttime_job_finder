@@ -19,6 +19,10 @@ _BODY_SECTIONS = (
 )
 
 _WRAP_DEFAULT = 440
+#: Horizontal padding to subtract when recomputing wraplength from the
+#: pane's real width.
+_WRAP_INSET = 44
+_MIN_WRAP = 180
 
 
 class DetailPane(ctk.CTkFrame):
@@ -47,10 +51,20 @@ class DetailPane(ctk.CTkFrame):
         self.title_label.grid(row=0, column=0, sticky="ew",
                               padx=10, pady=(10, 2))
 
+        link_row = ctk.CTkFrame(self, fg_color="transparent")
+        link_row.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        link_row.grid_columnconfigure(0, weight=1)
+
         self.url_label = ctk.CTkLabel(
-            self, text="", anchor="w", text_color=theme.LINK_TEXT,
+            link_row, text="", anchor="w", text_color=theme.LINK_TEXT,
             wraplength=_WRAP_DEFAULT, justify="left")
-        self.url_label.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        self.url_label.grid(row=0, column=0, sticky="ew")
+
+        # The clickable label alone was undiscoverable.
+        self.open_btn = ctk.CTkButton(
+            link_row, text="Open \u2197", width=86, height=26,
+            command=self.open_url, **theme.OUTLINE_BUTTON)
+        self.open_btn.grid(row=0, column=1, sticky="e", padx=(6, 0))
         self.url_label.bind("<Button-1>", lambda _e: self.open_url())
         self.url_label.bind(
             "<Enter>", lambda _e: self.url_label.configure(cursor="hand2"))
@@ -95,6 +109,26 @@ class DetailPane(ctk.CTkFrame):
         self.body.grid(row=0, column=0, sticky="nsew")
         self.body.grid_columnconfigure(0, weight=1)
 
+        # Built once and re-filled on every selection. Destroying and
+        # recreating these on each refresh made the pane flicker and threw
+        # away the reader's scroll position.
+        self._body_labels: dict[str, ctk.CTkLabel] = {}
+        for index, (label, field) in enumerate(_BODY_SECTIONS):
+            ctk.CTkLabel(
+                self.body, text=label, anchor="w", font=theme.heading_font(),
+            ).grid(row=index * 2, column=0, sticky="ew", padx=2, pady=(8, 2))
+            value = ctk.CTkLabel(
+                self.body, text="", anchor="w", justify="left",
+                wraplength=_WRAP_DEFAULT)
+            value.grid(row=index * 2 + 1, column=0, sticky="ew",
+                       padx=2, pady=(0, 8))
+            self._body_labels[field] = value
+
+        #: Last-rendered keyword string, so chips are only rebuilt on change.
+        self._chips_key: Optional[str] = None
+        self._wraplength = _WRAP_DEFAULT
+        self.bind("<Configure>", self._on_resize)
+
     # -- content -----------------------------------------------------------
 
     def clear(self) -> None:
@@ -104,12 +138,12 @@ class DetailPane(ctk.CTkFrame):
         self._secondary_op = None
         self.title_label.configure(text="(select a job)")
         self.url_label.configure(text="")
+        self.open_btn.configure(state="disabled")
         self.meta_label.configure(text="")
         self.follow_up_btn.grid_remove()
-        for widget in self.chips_frame.winfo_children():
-            widget.destroy()
-        for widget in self.body.winfo_children():
-            widget.destroy()
+        self._render_chips("")
+        for label in self._body_labels.values():
+            label.configure(text="")
         self._apply_actions(job_actions.JobState())
 
     def show(self, job: dict) -> None:
@@ -119,6 +153,9 @@ class DetailPane(ctk.CTkFrame):
 
         self._url = (job.get("detail_url") or "").strip()
         self.url_label.configure(text=self._url)
+        self.open_btn.configure(
+            state="normal" if self._url.startswith(("http://", "https://"))
+            else "disabled")
 
         self.meta_label.configure(text="\n".join(self._meta_lines(job)))
 
@@ -176,6 +213,11 @@ class DetailPane(ctk.CTkFrame):
             self.follow_up_btn.grid_remove()
 
     def _render_chips(self, matched_keywords: str) -> None:
+        # Only rebuild when the keywords actually changed -- toggling a flag
+        # re-renders the pane and used to churn these every time.
+        if matched_keywords == self._chips_key:
+            return
+        self._chips_key = matched_keywords
         for widget in self.chips_frame.winfo_children():
             widget.destroy()
         keywords = [k.strip() for k in matched_keywords.split(",") if k.strip()]
@@ -192,16 +234,24 @@ class DetailPane(ctk.CTkFrame):
             ).pack(side="left", padx=(0, 4), pady=2)
 
     def _render_body(self, job: dict) -> None:
-        for widget in self.body.winfo_children():
-            widget.destroy()
-        for label, field in _BODY_SECTIONS:
-            ctk.CTkLabel(
-                self.body, text=label, anchor="w", font=theme.heading_font(),
-            ).pack(fill="x", padx=2, pady=(8, 2))
-            ctk.CTkLabel(
-                self.body, text=(job.get(field) or "").strip() or "(empty)",
-                anchor="w", justify="left", wraplength=380,
-            ).pack(fill="x", padx=2, pady=(0, 8))
+        for field, label in self._body_labels.items():
+            label.configure(text=(job.get(field) or "").strip() or "(empty)")
+
+    # -- reflow ------------------------------------------------------------
+
+    def _on_resize(self, event=None) -> None:
+        """Keep wraplength in step with the pane's real width, so text
+        reflows when the divider is dragged instead of being clipped."""
+        wrap = max(_MIN_WRAP, self.winfo_width() - _WRAP_INSET)
+        if abs(wrap - self._wraplength) < 8:
+            return
+        self._wraplength = wrap
+        for label in (self.title_label, self.meta_label):
+            label.configure(wraplength=wrap)
+        # The URL shares its row with the Open button.
+        self.url_label.configure(wraplength=max(_MIN_WRAP, wrap - 100))
+        for label in self._body_labels.values():
+            label.configure(wraplength=wrap)
 
     # -- url ---------------------------------------------------------------
 
