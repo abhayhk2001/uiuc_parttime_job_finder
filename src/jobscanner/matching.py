@@ -40,13 +40,13 @@ def find_matches(job_record: dict, keywords: list[str]) -> list[str]:
     return match(keywords, haystack)
 
 
-def rematch_all(keywords: list[str]) -> int:
+def rematch_all(keywords: list[str], path: Path = config.DB_PATH) -> int:
     """Re-run matching for every job in the DB against the given keywords.
 
     Returns the number of job rows updated. Used by the GUI keyword editor
     so the table refreshes immediately when keywords change.
     """
-    rows = db.get_all_jobs()
+    rows = db.get_all_jobs(path)
     updated = 0
     for row in rows:
         if not (row.get("job_description") or row.get("requirements") or row.get("skills")):
@@ -62,6 +62,7 @@ def rematch_all(keywords: list[str]) -> int:
             row.get("requirements", "") or "",
             row.get("skills", "") or "",
             matches,
+            path,
         )
         updated += 1
     return updated
