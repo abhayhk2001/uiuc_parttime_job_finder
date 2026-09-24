@@ -33,11 +33,11 @@ def _should_launch_gui(args) -> bool:
 
 
 def _open_gui() -> None:
-    # Imported lazily on purpose: Tk / customtkinter are an optional runtime
-    # dependency. A headless install (cron box, CI) can run the scanner
-    # without them, and this is the only place that would break. Keep it here.
+    # Imported lazily on purpose: PySide6 is an optional runtime dependency.
+    # A headless install (cron box, CI) can run the scanner without it, and
+    # this is the only place that would break. Keep it here.
     try:
-        from jobscanner.ui import app as gui
+        from jobscanner.ui_qt import app as gui
     except Exception as exc:
         print(f"[gui] could not import GUI module: {exc}", file=sys.stderr)
         return
