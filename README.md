@@ -1,14 +1,11 @@
 # UIUC Virtual Job Board Scanner
 
-A lightweight Python tool that crawls the **Other University Positions** section of the [UIUC Virtual Job Board](https://secure.osfa.illinois.edu/vjb/), mirrors every posting into a local SQLite database indexed by `Job ID`, scrapes each new posting's **Job Description / Requirements / Skills**, and matches them against your keyword list. Ships with both a terminal scanner and a CustomTkinter GUI.
+A lightweight Python tool that crawls the **Other University Positions** section of the [UIUC Virtual Job Board](https://secure.osfa.illinois.edu/vjb/), mirrors every posting into a local SQLite database indexed by `Job ID`, scrapes each new posting's **Job Description / Requirements / Skills**, and matches them against your keyword list. Ships with both a terminal scanner and a native PySide6 (Qt) GUI.
 
 ## Requirements
 
 - Python 3.9 or newer (uses `list[...]`, `tuple[...]`, etc.).
-- Tk 8.6+ (bundled with the official python.org macOS / Windows installers). On Debian/Ubuntu install it explicitly:
-  ```bash
-  sudo apt install python3-tk
-  ```
+- A platform that Qt 6 supports. PySide6 ships its own Qt binaries, so no system Qt installation is required.
 
 ## Setup
 
@@ -57,19 +54,24 @@ When run interactively, `python main.py` performs the scan and then opens the GU
               ▲                                                             │
               └──────────────── matching ◄──── keywords.json ◄─────────────┘
                                     │
-                                    └─► ui (CustomTkinter)
+                                     └─► ui_qt (PySide6 / Qt)
 
               cli ──► pipeline ──► everything above
 ```
 
 ## GUI features
 
-The window is split into three columns, separated by two draggable dividers:
+The window is a real native Qt application (PySide6): a real menu bar in the system bar on macOS, a real toolbar, a resizable `QDockWidget` sidebar you can drag out and re-dock, a sortable `QTableView`, and a scrollable detail pane.
 
-| Sections sidebar    | Jobs table                | Detail pane                |
-| ------------------- | ------------------------- | -------------------------- |
-| All / New / Old / Reviewed | Sortable, filterable rows  | Job details, context-aware action buttons, matched keywords |
+| Sections sidebar (`QDockWidget`)  | Jobs table (`QTableView`)         | Detail pane                  |
+| --------------------------------- | --------------------------------- | ---------------------------- |
+| Sections, bulk actions, keywords  | Sortable, filterable rows          | Job details, action buttons  |
 
+- **Native menu bar** — `File`, `Edit`, `View`, `Job`, `Scan`, `Help`. View → Toggle Sidebar (`Cmd/Ctrl-B`) and Toggle Log Dock (`Cmd/Ctrl-L`) hide/show their respective panels. View → Appearance (`Cmd-,` if you bind it) opens a Light/Dark/Auto dialog.
+- **Dockable sidebar** — the sections list, bulk actions and keywords panel live in a single `QDockWidget` on the left. Drag the dock's title bar to float it, drag it to another edge to re-dock, click the close icon to hide it. The toolbar keeps working whether the sidebar is visible or not.
+- **Dockable log console** — scan output streams into a `QDockWidget` at the bottom, hidden by default and toggled by `Cmd/Ctrl-L` or View → Toggle Log Dock. Float it out to read while you scan again, or hide it entirely.
+- **Native macOS integration** — the menu bar appears in the system bar; traffic-light buttons, dock icon, and standard keyboard shortcuts (Cmd-Q, Cmd-C, Cmd-V, Cmd-W) all work without extra wiring. The default menu roles (`QuitRole`, `AboutRole`) automatically route to the right place per platform.
+- **Light / Dark / Follow OS** — the app reads `QStyleHints.colorScheme()` and follows the OS appearance live. Override the choice via `View → Appearance`; the override is stored in `QSettings`.
 - **Sections sidebar** — five blocks stacked, with live counts:
   - **SECTIONS** —
     - **All** — every row in the database, so free-text search can span sections.
@@ -81,21 +83,17 @@ The window is split into three columns, separated by two draggable dividers:
   - **ARCHIVED** — jobs removed from the VJB listing since the last scan, or jobs you archived manually. Recoverable via Unarchive.
   - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Follow Up Further", "Archive all Follow Up". Each button is enabled only when its section has rows. The four destructive ones (revisit all, apply all, unmark all, archive all) ask for confirmation first; every one reports its result as a status-bar toast that fades after a few seconds rather than a modal dialog.
   - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`.
-- **Resizable, collapsible sidebar** — drag the sash between the sidebar and the table to resize it (180px – 700px). Collapse it to a 58px rail with the `«` button in its header, by double-clicking the sash, or with `Cmd/Ctrl-B`; the rail keeps every section's short label and live count. Expanding restores the width you last dragged to.
-- **Resizable detail pane** — a second sash sits between the table and the detail pane. Detail text reflows to the pane's width as you drag.
-- **Remembered layout** — sidebar width, collapsed state and detail width are saved on every drag release and on collapse (not just at exit), under the `ui_layout` key in the `meta` table.
-- **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). The *Matched Keywords* and *Posted* columns were intentionally removed; keywords are shown as chips in the detail pane and `date_posted` was rarely populated by the source site.
-- **Sorting**: click any column header to sort; the active column shows a ▲/▼ arrow. **Matches defaults to descending** (highest match count first) and is applied on open, so the most promising rows are already at the top; all other columns default to ascending. Click the same header again to flip direction. The chosen sort **persists across refreshes** — toggling Mark Reviewed, Mark Applied, Revisit, or adding/removing from To Apply preserves the user's chosen order.
-- **Row actions**: double-click (or press Return on) a row to open the posting in your browser. Right-click a row for a context menu — open, copy Job ID, and the same two state-machine actions the detail pane offers for that row.
-- **Empty sections** say why they're empty, distinguishing "no search matches", "no keyword matches" and a genuinely empty section.
-- **Highlight rules** in the table:
+- **Numeric section shortcuts** — `Cmd/Ctrl-1` through `Cmd/Ctrl-7` jump to the corresponding section (All, New, Old, Reviewed, To Apply, Follow Up, Archived).
+- **Search row** — a filter box above the table that matches case-insensitively across title, company, description, requirements, skills and matched keywords. The "Matches only" checkbox restricts the view to rows that matched at least one keyword. Both filters compose with the section sidebar.
+- **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). Sortable: click any column header. Right-aligned numeric columns. Right-click a row for the context menu (Open in Browser, Copy Job ID, Copy URL, the two state-machine actions). Double-click a row, or press Return, to open the posting in the default browser.
+- **Highlight rules** in the table (driven by the model's `ForegroundRole`):
   - Bright green text = matched one or more keywords and is not yet reviewed.
   - Dim green text = matched keywords but already reviewed.
   - Gray text = reviewed but didn't match any keyword.
   - Default light text = unreviewed, no keyword match.
-- **Detail pane** — per-job, in this order:
+- **Detail pane** — a `QScrollArea` containing:
   1. **Title + job ID**.
-  2. **VJB URL on its own line** — blue and clickable, with an explicit **"Open ↗"** button beside it. Both open the default browser; the button is disabled when the row has no usable URL.
+  2. **VJB URL** — link-coloured and clickable, with an explicit **"Open ↗"** button beside it. Both open the default browser via `QDesktopServices`; the button is disabled when the row has no usable URL.
   3. **Company**, plus applied / follow-up / archived dates where they apply.
   4. **Primary action button** — context-aware, checked in this order:
      - Archived job → **"↩ Unarchive"**.
@@ -109,12 +107,16 @@ The window is split into three columns, separated by two draggable dividers:
      - To Apply job → **"★ Remove from To Apply"**.
      - Reviewed job → disabled (can't re-add a reviewed job to To Apply).
      - Otherwise → **"☆ Add to To Apply"**.
-  6. **Matched keyword chips**.
-  7. **Description / Requirements / Skills** sections.
+  6. **Follow-up date editor** — only visible for applied jobs. Opens a `QDialog` with preset offsets (1d, 3d, 1w, 2w, 1m, 3m) and a `QDateEdit` with native calendar popup.
+  7. **Matched keyword chips**.
+  8. **Description / Requirements / Skills** sections in a `QTextBrowser` with HTML — text is selectable, copyable, and scrollable.
 
-  Both buttons come from one state machine in `ui/job_actions.py`, so a button's label and what it does can't disagree.
+  Both buttons come from one state machine in `ui_qt/job_actions.py`, so a button's label and what it does can't disagree.
 
-  The First/Last seen timestamps are intentionally hidden — they're internal bookkeeping and not user-facing.
+- **Remembered layout** — window geometry, dock layout, sidebar visibility, splitter sizes and theme override are all persisted via `QSettings` (native: `~/Library/Preferences/edu.illinois.jobscanner.plist` on macOS, registry on Windows). Restart and the window comes back the way you left it.
+- **Background scans** — clicking "Run Scan" runs `pipeline.run` on a `QThread`; output streams to the log dock via a queued signal. The button disables itself until the scan finishes.
+
+The First/Last seen timestamps are intentionally hidden — they're internal bookkeeping and not user-facing.
 
 ### Keyboard shortcuts
 
@@ -315,41 +317,43 @@ A scan writes to the DB in several places (`init_db` migrations, `upsert_listing
 ## Tests
 
 ```bash
-python tests/run_all.py                 # everything, no pytest needed
-python tests/test_gui_layout.py         # one module, as a plain script
-pytest tests/                           # also works: pip install -e ".[dev]"
-pytest tests/test_gui_layout.py -k sidebar
+pytest tests/                           # storage tests + Qt smoke tests
+python tests/smoke_skeleton.py          # window + theme + persistence
+python tests/smoke_table.py             # model + proxy + view
+python tests/test_db_isolated.py         # one module, as a plain script
 ```
-
-58 tests in two layers:
-
-| Module | Covers |
-| ------ | ------ |
-| `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune |
-| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Follow Up → Archived walk, sorting, filtering, both dialogs, log buffering, layout persistence |
-| `test_gui_layout.py` | Real pixel geometry: panes not overlapping, toolbar/footer spanning, the log console inside the footer, preset buttons in distinct cells, collapse/expand, both sashes |
-| `test_gui_bulk_actions.py` | Every registered bulk action, confirmation in both directions, toasts, the All section |
-| `test_gui_interactions.py` | Detail-pane widget reuse, text reflow, empty states, keyboard navigation and shortcuts, the row context menu |
 
 Notes:
 
-- **No test ever opens `data/jobs.db`.** Each one runs against its own
-  `tempfile.mkdtemp()` database, removed afterwards. New tests should use
-  `support.TempDB` or the `support.gui_app` context manager.
-- **The GUI tests run headlessly** — they build real windows, drive them, and
-  assert on widget state and screen geometry, but need no interaction. Where
-  Tk or customtkinter is unavailable they skip rather than fail, so
-  `python tests/run_all.py` still exercises the storage layer on a headless
+- **No test ever opens `data/jobs.db`.** Storage tests run against their own
+  `tempfile.mkdtemp()` database, removed afterwards.
+- **GUI smoke tests** (`smoke_skeleton.py`, `smoke_table.py`) build real
+  windows against fake data; they don't need a display server since they
+  use `QWidget.grab()` for verification.
+- **GUI test suite was intentionally disabled** during the CustomTkinter
+  → PySide6 port. Re-enable by porting the old tests against
+  `jobscanner.ui_qt` and dropping them back into `tests/`.
   box.
 - Test discovery is automatic (`support.run_module` scans for `test_*`), so a
   new test can't silently go unrun.
 
 ## Troubleshooting
 
-- **"ModuleNotFoundError: No module named 'customtkinter'"** — you ran the GUI in an environment that didn't install all of `requirements.txt`. Re-run `pip install -r requirements.txt`. The CLI itself does not need it: `jobscanner.cli` imports the GUI lazily, so a headless box can run scans without Tk.
+- **"ModuleNotFoundError: No module named 'PySide6'"** — you ran the GUI in an environment that didn't install all of `requirements.txt`. Re-run `pip install -r requirements.txt`. The CLI itself does not need it: `jobscanner.cli` imports the GUI lazily, so a headless box can run scans without Qt.
 - **"ModuleNotFoundError: No module named 'jobscanner'"** — you imported the package directly without installing it. Either `pip install -e .`, or go through the `main.py` / `gui.py` shims, which add `src/` to `sys.path` themselves.
-- **`_tkinter.TclError: ... no display`** — invoked the GUI in a context without a display (cron, SSH without X-forwarding, etc.). Use `--no-gui` or `python main.py --gui-only` from your own terminal.
 - **Scan hangs on the network** — `scraper/session.py` retries up to 3× with a 1 s base delay (`config.MAX_RETRIES`, `config.REQUEST_DELAY_SECONDS`). Persistent failures raise `VJBError`, which `cli.py` surfaces as `[fatal] ...` and returns exit code 2.
+
+## Building a macOS `.app` bundle
+
+```bash
+pip install pyinstaller
+pyinstaller pyinstaller.spec
+```
+
+Output: `dist/UIUC Part-Time Job Scanner.app` (~100 MB universal). The spec
+file already excludes unused Qt modules (`QtWebEngine`, `QtMultimedia`,
+`Qt3D`, `QtQuick`, etc.) to keep the bundle lean. Build on macOS to ship
+macOS; PyInstaller is platform-specific.
 
 ## Notes
 
