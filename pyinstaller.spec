@@ -21,6 +21,9 @@ from pathlib import Path
 
 APP_NAME = "UIUC Part-Time Job Scanner"
 ENTRY = Path("gui.py").resolve()
+# Spec files don't expose __file__ at the top level; fall back to cwd,
+# which is the repo root when invoked as `pyinstaller pyinstaller.spec`.
+REPO_ROOT = Path(os.environ.get("PYINSTALLER_REPO_ROOT", os.getcwd()))
 
 
 block_cipher = None
@@ -59,7 +62,10 @@ a = Analysis(
     [str(ENTRY)],
     pathex=[str(ENTRY.parent / "src")],
     binaries=[],
-    datas=[],
+    # Ship the default keyword list inside the bundle. jobscanner.paths
+    # looks for it at sys._MEIPASS/keywords.json and copies it into the
+    # user's AppData directory on first launch.
+    datas=[(str(REPO_ROOT / "keywords.json"), ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
