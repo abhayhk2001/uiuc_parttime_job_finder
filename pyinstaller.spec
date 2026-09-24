@@ -16,6 +16,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import shutil
 from pathlib import Path
 
 APP_NAME = "UIUC Part-Time Job Scanner"
@@ -118,3 +119,21 @@ if os.uname().sysname == "Darwin":
             "LSApplicationCategoryType": "public.app-category.productivity",
         },
     )
+
+    # Trim Qt frameworks the app does not use. PySide6_Addons ships every
+    # Qt module's framework into Contents/Frameworks/PySide6/Qt/lib/ even
+    # when the Python-level module isn't imported. Removing the unused
+    # frameworks trims ~8 MB off the bundle. Each frame is verified not to
+    # be a transitive dependency before being removed (see comments).
+    _TRIMMED_FRAMEWORKS = [
+        "QtPdf",                # no QPdf* usage in the app
+        "QtVirtualKeyboard",    # no input-method reliance
+        "QtVirtualKeyboardQml",
+        "QtQmlWorkerScript",    # no QML worker scripts
+        "QtSvg",                # no SVG asset loading
+    ]
+    _qt_lib = os.path.join(app.name, "Contents", "Frameworks", "PySide6", "Qt", "lib")
+    for _fw in _TRIMMED_FRAMEWORKS:
+        _path = os.path.join(_qt_lib, f"{_fw}.framework")
+        if os.path.isdir(_path):
+            shutil.rmtree(_path, ignore_errors=True)
