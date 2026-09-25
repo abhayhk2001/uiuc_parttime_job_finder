@@ -363,14 +363,8 @@ Notes:
 ## Building a macOS `.app` bundle
 
 ```bash
-# Recommended: clean venv + signed + notarized in one shot.
-CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-NOTARY_PROFILE="jobscanner-notary" \
-  ./build-mac.sh
-
-# Or, by hand:
-pip install pyinstaller
-pyinstaller pyinstaller.spec
+# Build (ad-hoc signed; fine for local use, won't pass Gatekeeper elsewhere)
+./build-mac.sh
 ```
 
 Output: `dist/UIUC Part-Time Job Scanner.app` (~95 MB universal). The spec
@@ -379,39 +373,41 @@ file already excludes unused Qt modules (`QtWebEngine`, `QtMultimedia`,
 `QtQmlWorkerScript`, etc.) to keep the bundle lean. Build on macOS to
 ship macOS; PyInstaller is platform-specific.
 
-### Distributing to other Macs (signing + notarization)
+## Distributing the app to other people
 
-`build-mac.sh` calls into `scripts/sign-and-notarize.sh` when
-`CODESIGN_IDENTITY` is set. To go end-to-end:
+Full step-by-step (Developer Program enrollment, certificate creation,
+signing + notarization, `.dmg` packaging, recipient install, data
+seeding) lives in [`docs/PUBLISHING.md`](docs/PUBLISHING.md).
 
-1. **Apple Developer Program** membership ($99/yr).
-2. **Developer ID Application certificate** in your keychain (Xcode >
-   Settings > Accounts > your Apple ID > Manage Certificates).
-3. **notarytool keychain profile** so the script can submit without
-   leaking your Apple ID:
-   ```bash
-   xcrun notarytool store-credentials jobscanner-notary \
-       --apple-id you@example.com \
-       --team-id  ABCDE12345 \
-       --password <app-specific-password-from-appleid.apple.com>
-   ```
-4. Build, sign, and notarize:
-   ```bash
-   CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
-   NOTARY_PROFILE="jobscanner-notary" \
-       ./build-mac.sh
-   ```
-5. Verify on the artifact:
-   ```bash
-   codesign --verify --deep --strict --verbose=2 \
-       "dist/UIUC Part-Time Job Scanner.app"
-   spctl --assess --type execute --verbose=2 \
-       "dist/UIUC Part-Time Job Scanner.app"
-   ```
+Quick path once your Apple Developer Program + Developer ID certificate
+are set up:
 
-Ad-hoc signing (the default when `CODESIGN_IDENTITY` is empty) is enough
-for local use. Gatekeeper will refuse to launch the ad-hoc-signed bundle
-on another Mac unless they right-click > Open.
+```bash
+CODESIGN_IDENTITY="Developer ID Application: Your Name (ABCDE12345)" \
+NOTARY_PROFILE="jobscanner-notary" \
+  ./build-mac.sh
+```
+
+…then drop `dist/UIUC Part-Time Job Scanner.app` into a `.dmg` and
+distribute.
+
+## Moving existing data into the bundled app
+
+When you switch from running the CLI / GUI from source to running the
+`.app`, the app reads from `~/Library/Application Support/UIUC Part-Time
+Job Scanner/` on macOS -- not from `<repo>/data/`. Your accumulated
+scan data needs to move there. Two ways:
+
+```bash
+# Developer: copy the source-tree DB into AppData so the .app sees it
+python scripts/migrate-to-appdata.py --apply
+
+# End-user: after installing the .app, seed it from an existing jobs.db
+jobscanner import path/to/source/data --apply
+```
+
+Both back up any pre-existing destination file before overwriting and
+refuse to clobber a newer destination unless `--force` is passed.
 
 ## Notes
 
