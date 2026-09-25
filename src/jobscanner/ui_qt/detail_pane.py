@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from jobscanner.timeutils import relative_days
 from jobscanner.ui_qt import job_actions as ja
 from jobscanner.ui_qt import theme
+from jobscanner.ui_qt.flow_layout import FlowLayout
 
 
 _BODY_FIELDS: tuple[tuple[str, str], ...] = (
@@ -164,10 +165,11 @@ class DetailPane(QWidget):
         layout.addWidget(chips_header)
 
         self.chips_flow = QWidget(inner)
-        self.chips_layout = QHBoxLayout(self.chips_flow)
-        self.chips_layout.setContentsMargins(0, 0, 0, 0)
-        self.chips_layout.setSpacing(6)
-        self.chips_layout.addStretch(1)
+        # Use a wrap-on-overflow flow layout so a job with many matched
+        # keywords (or a long keyword like "machine learning") doesn't
+        # squeeze every chip down to a single character.
+        self.chips_layout = FlowLayout(self.chips_flow, margin=0,
+                                       h_spacing=6, v_spacing=6)
         layout.addWidget(self.chips_flow)
 
         # Body text in a QTextBrowser. Anchors are clickable (we wire
@@ -314,25 +316,23 @@ class DetailPane(QWidget):
         if matched_keywords == getattr(self, "_chips_key", None):
             return
         self._chips_key = matched_keywords
-        # Clear all widgets from the layout. The stretch lives at the end,
-        # so we re-add it after removal.
+        # Clear the existing chips.
         while self.chips_layout.count():
             item = self.chips_layout.takeAt(0)
             w = item.widget() if item is not None else None
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
-        self.chips_layout.addStretch(1)
         keywords = [k.strip() for k in matched_keywords.split(",") if k.strip()]
         if not keywords:
             empty = QLabel("(no keyword match)", self.chips_flow)
             p = theme.current_palette()
             empty.setStyleSheet(f"color: {p['faint']};")
-            self.chips_layout.insertWidget(0, empty)
+            self.chips_layout.addWidget(empty)
             return
-        for i, kw in enumerate(keywords):
+        for kw in keywords:
             chip = _Chip(kw, self.chips_flow)
-            self.chips_layout.insertWidget(i, chip)
+            self.chips_layout.addWidget(chip)
 
     def _on_anchor_clicked(self, url: QUrl) -> None:
         if url.scheme() in ("http", "https"):

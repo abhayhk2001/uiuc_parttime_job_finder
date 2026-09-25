@@ -67,9 +67,9 @@ BULK_ACTIONS: tuple[BulkAction, ...] = (
         label="Mark all To Apply Applied",
         section=db.SECTION_TO_APPLY,
         run=db.bulk_mark_all_applied,
-        message=lambda n: f"Marked {n} job(s) as applied (moved to Follow Up).",
+        message=lambda n: f"Marked {n} job(s) as applied (moved to Applied).",
         confirm=("Mark every job in To Apply as applied?\n\n"
-                 "They move to Follow Up with today's date recorded."),
+                 "They move to Applied with today's date recorded."),
     ),
     BulkAction(
         id="clear_to_apply",
@@ -81,7 +81,7 @@ BULK_ACTIONS: tuple[BulkAction, ...] = (
     ),
     BulkAction(
         id="further_follow_up",
-        label="Mark all Follow Up Further",
+        label="Mark all Applied Further",
         section=db.SECTION_FOLLOW_UP,
         run=lambda path: db.bulk_mark_further_follow_up(
             db.SECTION_FOLLOW_UP, path=path),
@@ -91,11 +91,11 @@ BULK_ACTIONS: tuple[BulkAction, ...] = (
     ),
     BulkAction(
         id="archive_follow_up",
-        label="Archive all Follow Up",
+        label="Archive all Applied",
         section=db.SECTION_FOLLOW_UP,
         run=lambda path: db.bulk_archive_section(db.SECTION_FOLLOW_UP, path),
-        message=lambda n: f"Archived {n} job(s) from Follow Up.",
-        confirm="Archive every job currently in Follow Up?",
+        message=lambda n: f"Archived {n} job(s) from Applied.",
+        confirm="Archive every job currently in Applied?",
     ),
 )
 

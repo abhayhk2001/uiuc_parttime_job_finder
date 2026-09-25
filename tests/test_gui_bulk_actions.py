@@ -58,8 +58,8 @@ def test_destructive_actions_confirm_first() -> None:
             pump_events()
         eq(len(asked), 1, "the action asked for confirmation")
         eq(db.get_section_counts(path)["follow_up"], 3,
-           "all 3 moved to Follow Up")
-        check("moved to Follow Up" in app.status_bar.currentMessage(),
+           "all 3 moved to Applied")
+        check("moved to Applied" in app.status_bar.currentMessage(),
               f"the result was toasted "
               f"({app.status_bar.currentMessage()!r})")
 
