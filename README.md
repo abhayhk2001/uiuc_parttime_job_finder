@@ -317,25 +317,42 @@ A scan writes to the DB in several places (`init_db` migrations, `upsert_listing
 ## Tests
 
 ```bash
-pytest tests/                           # storage tests + Qt smoke tests
-python tests/smoke_skeleton.py          # window + theme + persistence
-python tests/smoke_table.py             # model + proxy + view
-python tests/test_db_isolated.py         # one module, as a plain script
+pytest tests/                               # everything (57 tests)
+pytest tests/test_db_isolated.py           # storage layer only
+python tests/test_gui_workflow.py          # one module, as a plain script
+python tests/test_gui_bulk_actions.py
+python tests/test_gui_interactions.py
+python tests/test_gui_layout.py
+python tests/smoke_skeleton.py             # standalone smoke (no DB needed)
+python tests/smoke_table.py
 ```
+
+57 tests in five layers:
+
+| Module | Covers |
+| ------ | ------ |
+| `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune |
+| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Follow Up → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings |
+| `test_gui_bulk_actions.py` | Every registered bulk action, both confirmation paths, the status-bar toast, the All section |
+| `test_gui_interactions.py` | Chip reuse across same-keyword refreshes, empty-state explanation, action shortcuts, context-menu signal, dock toggle, clipboard copy, the open-in-browser action |
+| `test_gui_layout.py` | Window defaults, central splitter proportions, sidebar + log dock placement, follow-up dialog preset grid, layout restoration across launches |
 
 Notes:
 
-- **No test ever opens `data/jobs.db`.** Storage tests run against their own
-  `tempfile.mkdtemp()` database, removed afterwards.
-- **GUI smoke tests** (`smoke_skeleton.py`, `smoke_table.py`) build real
-  windows against fake data; they don't need a display server since they
-  use `QWidget.grab()` for verification.
-- **GUI test suite was intentionally disabled** during the CustomTkinter
-  → PySide6 port. Re-enable by porting the old tests against
-  `jobscanner.ui_qt` and dropping them back into `tests/`.
-  box.
-- Test discovery is automatic (`support.run_module` scans for `test_*`), so a
-  new test can't silently go unrun.
+- **No test ever opens `data/jobs.db`.** Storage and GUI tests run against
+  their own `tempfile.mkdtemp()` database, removed afterwards.
+- **GUI tests** build real `QMainWindow`s against fake data. Pytest will
+  reuse a single `QApplication` across all tests in the run; plain
+  scripts construct their own per `qt_app()` invocation.
+- The `support.pump_events()` helper is the Qt equivalent of Tk's
+  `app.update()`: call it after a state change to let the model/proxy/
+  view settle before reading widget state.
+- The QSettings org/app name (`UIUC` / `PartTimeJobScanner`) is used by
+  layout-persistence tests, so opening the real GUI during a test run
+  can leak state into later tests. `tests/test_gui_layout.py` clears
+  the persisted state it cares about at the top.
+- Test discovery is automatic (`support.run_module` scans for `test_*`),
+  so a new test can't silently go unrun.
 
 ## Troubleshooting
 

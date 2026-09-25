@@ -308,6 +308,12 @@ class DetailPane(QWidget):
     def _render_chips(self, matched_keywords: str) -> None:
         # Keep a copy so palette refreshes can rebuild chips.
         self._last_keywords = matched_keywords
+        # Same keywords as last time -> nothing to do. The chip widgets
+        # are reused, which avoids visible flicker and preserves any
+        # in-progress interaction.
+        if matched_keywords == getattr(self, "_chips_key", None):
+            return
+        self._chips_key = matched_keywords
         # Clear all widgets from the layout. The stretch lives at the end,
         # so we re-add it after removal.
         while self.chips_layout.count():

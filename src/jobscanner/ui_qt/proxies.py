@@ -37,7 +37,11 @@ class JobsFilterProxy(QSortFilterProxyModel):
         if text == self._needle:
             return
         self._needle = text
-        self.invalidateFilter()
+        # ``invalidate()`` is the non-deprecated alias for the
+        # row-filter invalidation in PySide6 6.11+; both
+        # ``invalidateFilter`` and ``invalidateRowsFilter`` raise
+        # DeprecationWarning on this binding.
+        self.invalidate()
 
     def search_text(self) -> str:
         return self._needle
@@ -46,7 +50,7 @@ class JobsFilterProxy(QSortFilterProxyModel):
         if bool(value) == self._matches_only:
             return
         self._matches_only = bool(value)
-        self.invalidateFilter()
+        self.invalidate()
 
     def matches_only(self) -> bool:
         return self._matches_only

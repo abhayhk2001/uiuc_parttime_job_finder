@@ -75,10 +75,16 @@ class FollowUpDialog(QDialog):
 
         preset_grid = QGridLayout()
         preset_grid.setSpacing(6)
+        # Keep references + their grid cell so the layout can be asserted
+        # on by tests and by introspection in the GUI (e.g. tooltips).
+        self.preset_buttons: list[QPushButton] = []
         for i, (days, label) in enumerate(PRESETS):
             btn = QPushButton(label, self)
             btn.clicked.connect(lambda _checked=False, d=days: self._apply_offset(d))
             preset_grid.addWidget(btn, i // _COLUMNS, i % _COLUMNS)
+            btn.grid_row = i // _COLUMNS
+            btn.grid_col = i % _COLUMNS
+            self.preset_buttons.append(btn)
         layout.addLayout(preset_grid)
 
         rows_used = (len(PRESETS) + _COLUMNS - 1) // _COLUMNS

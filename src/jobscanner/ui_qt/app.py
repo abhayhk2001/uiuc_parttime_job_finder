@@ -149,8 +149,10 @@ class JobScannerApp(QMainWindow):
         self._table = JobsTableView(central)
         self._table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer.addWidget(self._table, 1)
-        self._search_edit.textChanged.connect(self._table.set_search_text)
-        self._matches_only.toggled.connect(self._table.set_matches_only)
+        # The search box and matches-only toggle also drive the empty-state
+        # message -- wire through a single slot that updates both.
+        self._search_edit.textChanged.connect(self._on_filter_changed)
+        self._matches_only.toggled.connect(self._on_filter_changed)
         self._table.selectionJobIdChanged.connect(self._on_table_selection)
 
         # Sidebar signals.
@@ -217,7 +219,14 @@ class JobScannerApp(QMainWindow):
                                  f"Could not query DB:\n{exc}")
             return
 
+        # `set_rows` calls beginResetModel/endResetModel, which clears the
+        # selection. Preserve it so the detail pane keeps showing the
+        # same row after the refresh (with its new state).
+        prev_selected = self._table.selected_id()
+        self._table.set_empty_message(self._empty_message())
         self._table.set_rows(rows)
+        if prev_selected:
+            self._table.select_id(prev_selected)
         self._refresh_status()
         self._on_table_selection(self._table.selected_id())
 
@@ -244,6 +253,14 @@ class JobScannerApp(QMainWindow):
             f"{stats['total']} jobs · {stats['matching']} matching · "
             f"{stats['reviewed']} reviewed"
         )
+
+    def _empty_message(self) -> str:
+        """Message to show in the table's overlay when no rows are visible."""
+        if self._table.proxy().search_text():
+            return f"No jobs match \u201c{self._table.proxy().search_text()}\u201d here."
+        if self._table.proxy().matches_only():
+            return "No keyword matches in this section."
+        return f"Nothing in {db.SECTION_LABELS.get(self._section, self._section)}."
 
     # -- selection -------------------------------------------------------
 
@@ -339,6 +356,13 @@ class JobScannerApp(QMainWindow):
             else:
                 self.detail.clear()
         self.status_bar.showMessage(f"Selected job #{job_id}", 0)
+
+    def _on_filter_changed(self, *_args) -> None:
+        """Search text or matches-only changed: reapply both filters and
+        update the empty-state message to explain why nothing is visible."""
+        self._table.set_search_text(self._search_edit.text())
+        self._table.set_matches_only(self._matches_only.isChecked())
+        self._table.set_empty_message(self._empty_message())
 
     def _open_selected_in_browser(self) -> None:
         job = self._table.current_job_dict()
