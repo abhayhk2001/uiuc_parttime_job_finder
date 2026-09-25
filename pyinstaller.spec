@@ -89,11 +89,15 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,           # windowed app -- no terminal
+    console=False,           # windowed app -- no console terminal pops up
     disable_windowed_traceback=False,
     target_arch=None,        # None = current arch; set to "arm64"/"x86_64" to lock
-    codesign_identity=None,  # fill in for signed builds
-    entitlements_file=None,
+    # Sign with the env-supplied identity if present; ad-hoc otherwise.
+    # See scripts/sign-and-notarize.sh for the full distribution flow.
+    codesign_identity=os.environ.get("CODESIGN_IDENTITY"),
+    entitlements_file=(
+        "entitlements.plist" if os.path.exists("entitlements.plist") else None
+    ),
 )
 
 coll = COLLECT(
