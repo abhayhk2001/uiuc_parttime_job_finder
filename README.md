@@ -37,7 +37,7 @@ jobscanner --no-gui       # same as `python main.py --no-gui`, if pip-installed
 ```
 
 `main.py` and `gui.py` at the repo root are thin shims over
-`jobscanner.cli:main` and `jobscanner.ui.app:launch`, so every command above
+`jobscanner.cli:main` and `jobscanner.ui_qt.app:launch`, so every command above
 works whether or not the package is installed.
 
 On first run the bot creates `data/jobs.db`. On subsequent runs it detects new postings (anything whose `Job ID` isn't already in the DB) and only fetches details for those — plus any older rows still missing detail text.
@@ -207,7 +207,7 @@ Notes:
 ```
 pyproject.toml            packaging; defines the `jobscanner` console script
 main.py                   shim -> jobscanner.cli:main
-gui.py                    shim -> jobscanner.ui.app:launch
+gui.py                    shim -> jobscanner.ui_qt.app:launch
 keywords.json             your editable skill/keyword list
 data/jobs.db              produced on first run
 
