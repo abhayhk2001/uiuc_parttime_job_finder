@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from jobscanner import paths
+
 BASE_URL = "https://secure.osfa.illinois.edu/vjb"
 HOME_URL = f"{BASE_URL}/index.aspx"
 DETAIL_URL_TEMPLATE = f"{BASE_URL}/detail.aspx?type=nonfws&postid={{postid}}"
@@ -10,10 +12,15 @@ BTN_VALUE = "Show University Positions"
 
 # Repo root: src/jobscanner/config.py -> src/jobscanner -> src -> <repo>
 ROOT_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT_DIR / "data"
-DB_PATH = DATA_DIR / "jobs.db"
 
-KEYWORDS_PATH = ROOT_DIR / "keywords.json"
+# ``paths.user_*`` resolves to:
+#   - <repo>/data/ and <repo>/keywords.json when running from source, or
+#   - the platform's per-user AppData when running from a frozen bundle.
+# Callers read these at call time (not import time), so swapping modes
+# in the same process works correctly.
+DATA_DIR: Path = paths.user_data_dir()
+DB_PATH: Path = paths.user_db_path()
+KEYWORDS_PATH: Path = paths.user_keywords_path()
 
 REQUEST_DELAY_SECONDS = 1.0
 HTTP_TIMEOUT_SECONDS = 30

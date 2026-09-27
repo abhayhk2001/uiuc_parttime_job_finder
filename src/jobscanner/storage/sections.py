@@ -1,5 +1,5 @@
 """Section definitions: the single source of truth for what "New", "Old",
-"Reviewed", "To Apply", "Follow Up" and "Archived" mean in SQL.
+"Reviewed", "To Apply", "Applied" and "Archived" mean in SQL.
 
 Before this module the same predicates were written out in five places
 (the clause helpers, `get_jobs_by_section`, `get_section_counts`,
@@ -95,7 +95,11 @@ SECTIONS: tuple[Section, ...] = (
     Section(SECTION_OLD, "Old", _old_clause),
     Section(SECTION_REVIEWED, "Reviewed", _reviewed_clause),
     Section(SECTION_TO_APPLY, "To Apply", _to_apply_clause),
-    Section(SECTION_FOLLOW_UP, "Follow Up", _follow_up_clause,
+    # Display label changed from "Follow Up" -> "Applied" so it's
+    # obvious the section is for jobs the user has applied to. The
+    # SECTION_FOLLOW_UP constant (and the underlying SQL) still sort by
+    # follow_up_at, so the "due for follow-up first" ordering is kept.
+    Section(SECTION_FOLLOW_UP, "Applied", _follow_up_clause,
             order_by=_ORDER_BY_FOLLOW_UP),
     Section(SECTION_ARCHIVED, "Archived", _archived_clause,
             order_by=_ORDER_BY_ARCHIVED),

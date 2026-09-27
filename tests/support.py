@@ -1,8 +1,25 @@
-"""Shared test helpers: assertions, temp databases, and GUI fixtures.
+"""Shared test helpers for the Qt-port test suite.
 
-No pytest dependency — every test module here runs as a plain script and
-also works under pytest. Import this via ``from support import ...``; the
-path setup in :func:`bootstrap` makes that work either way.
+Public API mirrors the old Tk-support module so the test files can port
+mechanically:
+
+  TempDB, seed_jobs        -- unchanged
+  qt_app() / gui_app()     -- equivalent context manager that builds a
+                              QApplication + JobScannerApp against a
+                              throwaway DB
+  check / eq               -- unchanged
+  run_module               -- unchanged
+  widget_box               -- (x, y, width, height) in screen coords
+  answer_dialogs           -- stub QMessageBox.question
+  gui_available            -- check PySide6 + a working QApplication
+
+Differences from the Tk version, called out where they matter:
+
+  - app.update()             -> app.processEvents()
+  - app.geometry("WxH")      -> app.resize(W, H)
+  - app.winfo_*              -> Qt geometry accessors (see widget_box)
+  - app.tk.eval("after info") -> app.findChildren(type) for timer cleanup
+  - tk_popup on a Menu       -> contextMenuRequested signal + QMenu.popup
 """
 
 from __future__ import annotations
@@ -15,29 +32,23 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
+# Always add src/ + tests/ to sys.path so both `pytest` and `python tests/foo.py`
+# work without a conftest dance.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT / "tests")):
+    if _entry not in sys.path:
+        sys.path.insert(0, _entry)
 
-def bootstrap() -> Path:
-    """Put ``src/`` and this directory on sys.path. Returns the repo root.
-
-    Call at the top of every test module, before importing ``jobscanner``.
-    """
-    tests_dir = Path(__file__).resolve().parent
-    repo_root = tests_dir.parent
-    for entry in (str(repo_root / "src"), str(tests_dir)):
-        if entry not in sys.path:
-            sys.path.insert(0, entry)
-    return repo_root
-
-
-REPO_ROOT = bootstrap()
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Assertions
 # ---------------------------------------------------------------------------
 
+
 class TestFailed(AssertionError):
-    pass
+    """Raised by `check` / `eq` when a test expectation fails."""
 
 
 def check(cond: bool, msg: str) -> None:
@@ -45,21 +56,18 @@ def check(cond: bool, msg: str) -> None:
         raise TestFailed(msg)
 
 
-def eq(a, b, msg: str = "") -> None:
-    if a != b:
-        raise TestFailed(f"{msg}: expected {b!r}, got {a!r}")
+def eq(actual, expected, msg: str = "") -> None:
+    if actual != expected:
+        raise TestFailed(f"{msg}: expected {expected!r}, got {actual!r}")
 
 
 # ---------------------------------------------------------------------------
 # Temp databases
 # ---------------------------------------------------------------------------
 
-class TempDB:
-    """Yields a fresh DB path inside a temp dir, cleaning up afterwards.
 
-    Tests must never touch the user's real ``data/jobs.db``; this is the
-    pattern every test in this repo uses.
-    """
+class TempDB:
+    """Yields a fresh DB path inside a temp dir, cleaning up afterwards."""
 
     def __init__(self, prefix: str = "jobscanner_test_") -> None:
         self.prefix = prefix
@@ -80,20 +88,22 @@ class TempDB:
 # GUI fixtures
 # ---------------------------------------------------------------------------
 
-def gui_available() -> tuple[bool, str]:
-    """Can we build a Tk window here? Returns (ok, reason-if-not).
 
-    The GUI suite skips rather than fails on a headless box or an install
-    without customtkinter, so the storage tests still mean something there.
+def gui_available() -> tuple[bool, str]:
+    """Can we build a Qt window here? Returns (ok, reason-if-not).
+
+    Skips the GUI suite on a headless box or an install without PySide6,
+    so the storage tests still mean something there.
     """
     try:
-        import customtkinter  # noqa: F401
+        import PySide6  # noqa: F401
     except Exception as exc:  # noqa: BLE001
-        return False, f"customtkinter unavailable ({exc})"
+        return False, f"PySide6 unavailable ({exc})"
     try:
-        import tkinter
-        root = tkinter.Tk()
-        root.destroy()
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        if app is None:
+            return False, "no display"
     except Exception as exc:  # noqa: BLE001
         return False, f"no display ({exc})"
     return True, ""
@@ -102,18 +112,12 @@ def gui_available() -> tuple[bool, str]:
 DEFAULT_KEYWORDS = ["python", "data"]
 
 
-def seed_jobs(
-    db,
-    path: Path,
-    count: int = 6,
-    match_every: int = 2,
-    with_details: bool = True,
-) -> str:
+def seed_jobs(db, path: Path, count: int = 6, match_every: int = 2,
+              with_details: bool = True) -> str:
     """Insert `count` jobs, every `match_every`-th one matching a keyword.
 
-    Returns the scan cutoff, captured *before* the inserts so every row is
-    unambiguously "New" — ``now_iso()`` is second-precision, so taking it
-    afterwards races the inserts and makes tests flaky.
+    Returns the scan cutoff, captured *before* the inserts so every row
+    is unambiguously "New".
     """
     db.init_db(path)
     cutoff = db.now_iso()
@@ -142,95 +146,132 @@ def seed_jobs(
 
 
 @contextmanager
-def gui_app(count: int = 6, match_every: int = 2,
-            geometry: str = "1380x860", **seed_kwargs) -> Iterator[tuple]:
+def qt_app(count: int = 6, match_every: int = 2,
+           size: tuple[int, int] = (1380, 860),
+           **seed_kwargs) -> Iterator[tuple]:
     """Yield ``(app, db_path, keywords_path)`` backed by a throwaway DB.
 
-    The window is destroyed and the temp dir removed on exit, even if the
-    test raises.
+    Builds (or reuses) a QApplication, constructs a JobScannerApp, calls
+    ``processEvents()`` so the window's widget tree is realised, then
+    yields. On exit, cancels any pending QTimers, schedules the window
+    for deletion, and processes events so the deletion fires cleanly.
     """
     from jobscanner import storage as db
-    from jobscanner.ui import app as gui
+    from jobscanner.ui_qt import app as gui
+
+    # QApplication must be constructed exactly once per process. Pytest
+    # runs tests in the same interpreter and threads, so we reuse the
+    # existing instance if any. Use a sanitised argv: pytest's argv
+    # has flags (e.g. "-s") that QApplication rejects.
+    argv = sys.argv[:1] if QApplication.instance() is None else []
 
     with TempDB(prefix="jobscanner_gui_") as db_path:
         keywords_path = db_path.parent / "keywords.json"
         keywords_path.write_text(json.dumps(DEFAULT_KEYWORDS))
         seed_jobs(db, db_path, count=count, match_every=match_every,
                   **seed_kwargs)
+        if QApplication.instance() is None:
+            QApplication(argv)
         app = gui.JobScannerApp(db_path, keywords_path)
-        app.geometry(geometry)
-        app.update()
+        app.resize(*size)
+        # Make sure the widget tree is realised before the test inspects it.
+        app.show()
+        pump_events()
         try:
             yield app, db_path, keywords_path
         finally:
             _teardown(app)
 
 
-def _teardown(app) -> None:
-    """Destroy `app`, cancelling anything it still has scheduled.
+# Back-compat alias: the old tests used `gui_app`. Keep that name as an
+# alias so the test files port cleanly.
+gui_app = qt_app
 
-    customtkinter keeps its own `after` callbacks alive (DPI polling, widget
-    updates). A real run exits the process so they never fire, but a test
-    process that builds and tears down many windows sees them fire against
-    dead widgets and Tk writes the traceback straight to stderr.
+
+def _teardown(app) -> None:
+    """Cancel any pending QTimers and schedule the window for deletion.
+
+    The Qt event loop keeps firing after a window is destroyed unless we
+    cancel the scheduled callbacks (palette refresh, log drain, etc.).
+    A long test run would otherwise leak and eventually crash.
     """
+    from PySide6.QtCore import QTimer
+
     try:
-        for after_id in app.tk.eval("after info").split():
-            try:
-                app.after_cancel(after_id)
-            except Exception:  # noqa: BLE001
-                pass
+        for timer in app.findChildren(QTimer):
+            timer.stop()
     except Exception:  # noqa: BLE001
         pass
     try:
-        app.destroy()
+        app.close()
     except Exception:  # noqa: BLE001
         pass
     try:
-        app.update()
+        app.deleteLater()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        QApplication.processEvents()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def pump_events() -> None:
+    """Drain pending Qt events.
+
+    Replacement for Tk's ``app.update()``. Tests call this after a state
+    change (selecting a row, opening a dialog, setting a filter) to let
+    the model/proxy/view settle before the test reads widget state.
+    """
+    QApplication.processEvents()
 
 
 def widget_box(widget) -> tuple[int, int, int, int]:
-    """(x, y, width, height) of a widget in screen coordinates."""
-    return (widget.winfo_rootx(), widget.winfo_rooty(),
-            widget.winfo_width(), widget.winfo_height())
+    """(x, y, width, height) of a widget in screen coordinates.
+
+    Qt widgets must be shown for `geometry()` to return real values;
+    this helper ensures the widget is realised before reading it. The
+    returned ``(x, y)`` is the widget's top-left in screen pixels.
+    """
+    if not widget.isVisible():
+        widget.show()
+        QApplication.processEvents()
+    rect = widget.geometry()
+    top_left = widget.mapToGlobal(rect.topLeft())
+    return (top_left.x(), top_left.y(), rect.width(), rect.height())
 
 
 @contextmanager
 def answer_dialogs(answer: bool) -> Iterator[list]:
-    """Stub messagebox.askokcancel so confirmations can be driven headlessly.
+    """Stub QMessageBox.question so destructive confirmations can be driven.
 
-    Yields a list that records the title of every prompt raised.
+    Yields a list that records every confirmation prompt raised. Each
+    prompt is auto-answered with ``answer``.
     """
-    from tkinter import messagebox
+    from PySide6.QtWidgets import QMessageBox
 
     asked: list = []
-    original = messagebox.askokcancel
+    original = QMessageBox.question
 
-    def _stub(title="", message="", **kwargs):
+    def _stub(parent=None, title="", text="", *args, **kwargs):
         asked.append(title)
-        return answer
+        return QMessageBox.Yes if answer else QMessageBox.No
 
-    messagebox.askokcancel = _stub
+    QMessageBox.question = _stub
     try:
         yield asked
     finally:
-        messagebox.askokcancel = original
+        QMessageBox.question = original
 
 
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
+
 def run_module(namespace: dict, title: str = "",
                skip_reason: str = "") -> tuple[int, int, int]:
-    """Run every ``test_*`` callable in `namespace`. Returns (pass, fail, skip).
-
-    Discovery is automatic rather than a hand-maintained list, so a new test
-    can't silently go unrun.
-    """
+    """Run every ``test_*`` callable in ``namespace``."""
     tests = [
         (name, obj) for name, obj in sorted(namespace.items())
         if name.startswith("test_") and callable(obj)

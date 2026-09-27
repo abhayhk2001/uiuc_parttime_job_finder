@@ -1,27 +1,31 @@
 """Test suite for the UIUC part-time job scanner.
 
-Two layers:
+Layers:
 
-* ``test_db_isolated``   -- the storage layer, against temporary SQLite files.
-* ``test_gui_*``         -- the GUI, driven headlessly against throwaway
-  databases. These skip themselves where Tk or customtkinter isn't
-  available, so the suite stays useful on a headless box.
+* ``test_db_isolated`` -- the storage layer, against temporary SQLite files.
+* ``test_gui_workflow`` -- sections, selection, the job state machine
+  walk, sorting, filtering, dialogs.
+* ``test_gui_bulk_actions`` -- every registered bulk action, both
+  confirmation paths.
+* ``test_gui_interactions`` -- detail-pane rendering, context menu,
+  shortcuts, clipboard, dock visibility.
+* ``test_gui_layout`` -- window geometry, splitter proportions, dock
+  placement, dialog geometry.
+* ``smoke_skeleton`` / ``smoke_table`` -- model + theme + persistence
+  smoke tests that don't need a display.
 
-No test ever opens the user's real ``data/jobs.db``: every one runs inside
-a ``tempfile.mkdtemp()`` directory that is removed afterwards. Any new test
-in this repo should mirror that -- see ``support.TempDB`` and
-``support.gui_app``.
+No test ever opens the user's real ``data/jobs.db``: storage tests run
+inside a ``tempfile.mkdtemp()`` directory that is removed afterwards.
 
-Run the lot::
+Run with::
 
-    python tests/run_all.py
-
-Or a single module, as a plain script (no pytest needed)::
-
-    python tests/test_gui_layout.py
-
-pytest works too, and is the easiest way to run one test::
-
+    python tests/smoke_skeleton.py
+    python tests/smoke_table.py
     pytest tests/
-    pytest tests/test_gui_layout.py -k sidebar
+    # or one file at a time, as a plain script:
+    python tests/test_gui_workflow.py
+    python tests/test_gui_bulk_actions.py
+    python tests/test_gui_interactions.py
+    python tests/test_gui_layout.py
+    python tests/test_db_isolated.py
 """

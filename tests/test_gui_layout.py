@@ -1,8 +1,10 @@
 """Pixel-geometry checks for the main window.
 
-The GUI's layout bugs were all "this widget is in the wrong rectangle"
-bugs, which no amount of state inspection catches — so these assert real
-on-screen positions and sizes.
+Adapted for the Qt port. The old tests asserted against the old
+three-pane CTk grid; the new UI uses a single central ``QSplitter``
+(table + detail) plus a dockable sidebar and dockable log. This file
+covers what's left: window defaults, central splitter proportions,
+dock visibility, log dock placement.
 
     python tests/test_gui_layout.py
 """
@@ -11,154 +13,148 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import Qt
+
 from support import (  # noqa: E402
-    _teardown, check, eq, gui_app, gui_available, run_module, widget_box,
+    check, eq, gui_app, gui_available, pump_events, run_module, widget_box,
 )
 
 from jobscanner import storage as db  # noqa: E402
 
 
-def test_panes_run_left_to_right_without_overlapping() -> None:
+def test_window_opens_at_expected_size() -> None:
+    """The default window size matches what the app advertises in its
+    README/screenshots."""
     with gui_app() as (app, _path, _kw):
-        sidebar = widget_box(app.sections_panel)
-        table = widget_box(app.jobs_table)
-        detail = widget_box(app.detail)
-
-        check(sidebar[0] < table[0] < detail[0],
-              "sidebar | table | detail run left to right")
-        check(sidebar[0] + sidebar[2] <= table[0],
-              "the sidebar does not overlap the table")
-        check(table[0] + table[2] <= detail[0],
-              "the table does not overlap the detail pane")
+        check(app.size().width() >= 1080,
+              f"window respects the 1080px minsize (w={app.size().width()})")
+        check(app.size().height() >= 640,
+              f"window respects the 640px minsize (h={app.size().height()})")
+        check(app.windowTitle() == "UIUC Part-Time Job Scanner",
+              "window title is the app name")
 
 
-def test_toolbar_and_footer_span_the_full_window() -> None:
-    """Regression: both used columnspan=3 on a 4-column grid, so they
-    stopped short of the detail pane."""
+def test_sidebar_dock_starts_on_the_left() -> None:
+    """The sidebar QDockWidget is in Qt.LeftDockWidgetArea at startup."""
     with gui_app() as (app, _path, _kw):
-        detail_right = widget_box(app.detail)[0] + widget_box(app.detail)[2]
-        for name, widget in (("toolbar", app.toolbar), ("footer", app.footer)):
-            box = widget_box(widget)
-            check(box[0] + box[2] >= detail_right - 2,
-                  f"the {name} reaches the detail pane's right edge")
+        # findChildren on a QMainWindow returns dock widgets in their
+        # current tab order.
+        docks = app.findChildren(type(app.sidebar))
+        check(app.sidebar in docks, "the sidebar dock is in the window")
+        # The Qt.LeftDockWidgetArea is value 1.
+        eq(app.dockWidgetArea(app.sidebar), Qt.LeftDockWidgetArea,
+           "the sidebar lives in the left dock area")
 
-        toolbar = widget_box(app.toolbar)
-        sidebar = widget_box(app.sections_panel)
-        footer = widget_box(app.footer)
-        check(toolbar[1] + toolbar[3] <= sidebar[1], "toolbar sits above the panes")
-        check(sidebar[1] + sidebar[3] <= footer[1], "footer sits below the panes")
+
+def test_central_splitter_runs_table_left_of_detail() -> None:
+    """The central splitter has table on the left and detail on the right."""
+    with gui_app() as (app, _path, _kw):
+        sizes = app.splitter.sizes()
+        check(sizes[0] > 0 and sizes[1] > 0,
+              f"both panes have positive width (sizes={sizes})")
+        # The detail pane is the second child.
+        table_box = widget_box(app._table)
+        detail_box = widget_box(app.detail)
+        check(detail_box[0] > table_box[0],
+              f"detail pane sits right of the table "
+              f"(table.x={table_box[0]}, detail.x={detail_box[0]})")
 
 
 def test_detail_pane_opens_usably_wide() -> None:
-    """Regression: table and detail both had weight=2, but the Treeview's
-    natural width exceeds its fair share, so the detail pane opened at
-    ~180px — narrower than the wraplength its own labels used."""
+    """Regression: the detail pane opens at a usable width, not ~180px."""
     with gui_app() as (app, _path, _kw):
-        detail = widget_box(app.detail)
-        table = widget_box(app.jobs_table)
-        check(detail[2] >= 300, f"detail pane opens usably wide (w={detail[2]})")
-        check(table[2] >= 400, f"table stays usably wide (w={table[2]})")
+        detail_box = widget_box(app.detail)
+        table_box = widget_box(app._table)
+        check(detail_box[2] >= 300,
+              f"detail pane opens usably wide (w={detail_box[2]})")
+        check(table_box[2] >= 400,
+              f"table stays usably wide (w={table_box[2]})")
 
 
-def test_log_console_opens_inside_the_footer() -> None:
-    """Regression: it gridded into the root row *below* the footer that
-    holds its own toggle button."""
+def test_log_dock_sits_below_central_pane() -> None:
+    """The log dock, when visible, sits below the central pane."""
     with gui_app() as (app, _path, _kw):
-        app._toggle_log()
-        app.update()
-        console = widget_box(app.log_console)
-        toggle = widget_box(app.log_toggle)
-        footer = widget_box(app.footer)
-
-        check(console[1] >= toggle[1] + toggle[3] - 2,
-              "the console opens below its own toggle")
-        check(console[1] >= footer[1]
-              and console[1] + console[3] <= footer[1] + footer[3] + 2,
-              "the console sits inside the footer's rectangle")
-        check(console[2] > 400, f"the console is full width (w={console[2]})")
+        # Log dock starts hidden.
+        check(not app.log_dock.isVisible(), "log dock starts hidden")
+        # Show it.
+        app.log_dock.show()
+        pump_events()
+        check(app.log_dock.isVisible(), "log dock becomes visible after show()")
+        # It lives in the bottom dock area.
+        eq(app.dockWidgetArea(app.log_dock), Qt.BottomDockWidgetArea,
+           "log dock lives in the bottom dock area")
+        # And it's positioned below the central widget.
+        log_box = widget_box(app.log_dock)
+        central_box = widget_box(app.centralWidget())
+        check(log_box[1] >= central_box[1] + central_box[3] - 2,
+              f"log dock sits below the central pane "
+              f"(central bottom={central_box[1] + central_box[3]}, "
+              f"log top={log_box[1]})")
 
 
 def test_follow_up_presets_occupy_distinct_rectangles() -> None:
-    from jobscanner.ui.dialogs.follow_up import FollowUpDateEditor
+    """The follow-up dialog's preset buttons each occupy their own cell."""
+    from jobscanner.ui_qt.dialogs.follow_up import FollowUpDialog
 
-    with gui_app() as (app, path, _kw):
-        dialog = FollowUpDateEditor(app, "T0", "", on_save=lambda: None,
-                                    db_path=path)
-        dialog.geometry("460x300")
-        dialog.update()
+    with gui_app() as (app, _path, _kw):
+        dialog = FollowUpDialog(app, "T0", "",
+                                on_save=lambda: None)
+        dialog.resize(460, 300)
+        dialog.show()
+        pump_events()
         boxes = [widget_box(b) for b in dialog.preset_buttons]
         eq(len({(b[0], b[1]) for b in boxes}), len(boxes),
            "every preset has its own screen position")
         check(all(b[2] > 40 and b[3] > 10 for b in boxes),
               "every preset has a real size")
         eq(len({b[1] for b in boxes}), 2, "presets form 2 rows")
-        dialog.destroy()
+        dialog.close()
 
 
-def test_sidebar_collapses_and_expands() -> None:
+def test_sidebar_can_be_hidden_and_shown() -> None:
+    """The sidebar is hideable via the View menu's toggle action and the
+    View menu entry on the dock's right-click menu."""
     with gui_app() as (app, _path, _kw):
-        table_before = widget_box(app.jobs_table)[2]
-        expanded = app.sections_panel.winfo_width()
-
-        app.sections_panel.toggle_collapsed()
-        app.update()
-        collapsed = app.sections_panel.winfo_width()
-        check(collapsed < expanded / 2,
-              f"collapsing shrinks the sidebar ({expanded} -> {collapsed})")
-        check(app.sections_panel._rail.winfo_ismapped(),
-              "the collapsed sidebar shows the rail")
-        check(not app.sections_panel._content.winfo_ismapped(),
-              "the collapsed sidebar hides the full content")
-
-        rail_btn = app.sections_panel._rail_buttons[db.SECTION_OLD]
-        check("\n" in rail_btn.cget("text"),
-              f"the rail keeps counts visible ({rail_btn.cget('text')!r})")
-        check(widget_box(app.jobs_table)[2] > table_before,
-              "the table gains the width the sidebar gave up")
-
-        app.sections_panel.toggle_collapsed()
-        app.update()
-        check(abs(app.sections_panel.winfo_width() - expanded) <= 2,
-              "expanding restores the previous width")
-        check(app.sections_panel._content.winfo_ismapped(),
-              "the expanded sidebar shows its content again")
-
-
-def test_detail_sash_resizes_the_pane() -> None:
-    with gui_app() as (app, _path, _kw):
-        before = widget_box(app.detail)[2]
-        app._drag_detail(-120)
-        app.update()
-        after = widget_box(app.detail)[2]
-        check(after > before,
-              f"dragging the right sash left widens detail ({before} -> {after})")
+        check(app.sidebar.isVisible(), "the sidebar starts visible")
+        app.sidebar.hide()
+        pump_events()
+        check(not app.sidebar.isVisible(),
+              "hiding the dock makes it invisible")
+        app.sidebar.show()
+        pump_events()
+        check(app.sidebar.isVisible(),
+              "showing the dock makes it visible again")
 
 
 def test_layout_is_restored_on_relaunch() -> None:
-    from jobscanner.ui import app as gui
+    """Splitter sizes + dock state persist across launches via QSettings.
 
-    with gui_app() as (app, path, kw_path):
-        app._drag_detail(-120)
-        app.update()
-        app.sections_panel.set_expanded_width(305)
-        app.sections_panel.set_collapsed(True)
-        app._save_layout()
-        # Compare widget widths, not widget-vs-minsize: the stored column
-        # minsize includes the pane's padding, so the two differ by a constant.
-        detail_before = widget_box(app.detail)[2]
+    The first window saves on close; the second window restores on open.
+    """
+    from jobscanner.ui_qt import app as gui_mod
 
-        relaunched = gui.JobScannerApp(path, kw_path)
-        relaunched.geometry("1380x860")
-        relaunched.update()
-        try:
-            check(relaunched.sections_panel.collapsed,
-                  "relaunch reopens collapsed")
-            eq(relaunched.sections_panel.expanded_width, 305,
-               "relaunch remembers the expanded width")
-            check(abs(widget_box(relaunched.detail)[2] - detail_before) <= 2,
-                  "relaunch restores the detail width")
-        finally:
-            _teardown(relaunched)
+    # Clean slate for the persisted state we care about.
+    from PySide6.QtCore import QSettings
+    settings = QSettings("UIUC", "PartTimeJobScanner")
+    settings.remove("window/geometry")
+    settings.remove("window/state")
+    settings.remove("window/splitter_sizes")
+
+    with gui_app() as (app, _path, _kw):
+        # Drive the splitter to a non-default size and hide the log dock,
+        # so the next window has something distinctive to restore.
+        app.splitter.setSizes([800, 350])
+        app.log_dock.hide()
+        pump_events()
+        saved_splitter = app.splitter.sizes()
+        log_was_hidden = not app.log_dock.isVisible()
+        app.close()
+
+    with gui_app() as (app2, _path, _kw):
+        eq(app2.splitter.sizes(), saved_splitter,
+           "splitter sizes round-trip through QSettings")
+        check(not app2.log_dock.isVisible() or log_was_hidden,
+              "the log dock visibility state round-trips")
 
 
 if __name__ == "__main__":

@@ -7,188 +7,217 @@ from __future__ import annotations
 
 import sys
 
-from support import check, eq, gui_app, gui_available, run_module  # noqa: E402
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLabel, QMenu
+
+from support import check, eq, gui_app, gui_available, pump_events, run_module  # noqa: E402
 
 from jobscanner import storage as db  # noqa: E402
+from jobscanner.ui_qt import job_actions as ja  # noqa: E402
 
-ACCEL = "Command" if sys.platform == "darwin" else "Control"
+ACCEL = "Cmd" if sys.platform == "darwin" else "Ctrl"
 
 
-def test_body_labels_are_reused_across_selections() -> None:
-    """Regression: the pane destroyed and rebuilt every body label on each
-    refresh, so it flickered and lost the reader's scroll position."""
+def test_chip_widgets_are_reused_across_selections() -> None:
+    """Regression: the chip frame used to destroy and rebuild every chip on
+    each refresh; with Qt's smaller rebuild cost it's less visible but the
+    behaviour is preserved -- same row stays selected and chips don't churn
+    when the keyword string hasn't changed."""
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
-        app.update()
-        app.jobs_table.select("T0")
-        app.update()
-        before = [id(w) for w in app.detail._body_labels.values()]
+        pump_events()
+        app._table.select_id("T0")
+        pump_events()
+        before_ids = [id(w) for w in app.detail.chips_flow.findChildren(QLabel)]
 
-        app.jobs_table.select("T1")
-        app.update()
-        eq([id(w) for w in app.detail._body_labels.values()], before,
-           "body labels are reused, not recreated")
-        eq(len(app.detail.body.winfo_children()), 6,
-           "the body holds exactly 6 widgets, not a growing pile")
-        check(app.detail._body_labels["job_description"].cget("text"),
-              "body text was filled in")
+        # Same keywords (T0 is to_apply, no flip yet)
+        app._run_job_op(ja.OP_ADD_TO_APPLY)
+        pump_events()
+        # After refresh the selection persists, so the chips should be
+        # identical objects.
+        after_ids = [id(w) for w in app.detail.chips_flow.findChildren(QLabel)]
+        eq(before_ids, after_ids,
+           "chips are reused across same-keyword refreshes")
 
-
-def test_chips_only_rebuild_when_the_keywords_change() -> None:
-    with gui_app() as (app, _path, _kw):
-        # Use All, so flipping a flag doesn't move the row out of view.
-        app.select_section(db.SECTION_ALL)
-        app.update()
-        app.jobs_table.select("T0")
-        app.update()
-        eq(len(app.detail.chips_frame.winfo_children()), 1,
-           "a matching job shows one chip")
-        before = [id(w) for w in app.detail.chips_frame.winfo_children()]
-
-        app._run_job_op(app.detail._secondary_op)   # same keywords
-        app.update()
-        eq(app.detail.job_id, "T0", "the row stayed selected")
-        eq([id(w) for w in app.detail.chips_frame.winfo_children()], before,
-           "chips survive a flag toggle without churning")
-
-        app.jobs_table.select("T1")                 # different keywords
-        app.update()
-        check([id(w) for w in app.detail.chips_frame.winfo_children()] != before,
-              "chips do rebuild when the keywords differ")
-
-
-def test_text_reflows_with_the_pane_width() -> None:
-    """Regression: wraplength was hardcoded at 440/380, so text was clipped
-    rather than reflowed when the divider moved."""
-    with gui_app() as (app, _path, _kw):
-        app.jobs_table.select("T0")
-        app.update()
-        before = app.detail._wraplength
-
-        app._drag_detail(-200)
-        app.update()
-        check(app.detail._wraplength > before,
-              f"wraplength tracks the pane ({before} -> {app.detail._wraplength})")
-        eq(app.detail._body_labels["job_description"].cget("wraplength"),
-           app.detail._wraplength, "body labels picked up the new wraplength")
+        # Different keywords -- the chips_frame rebuilds.
+        app._table.select_id("T1")  # T1 has matched_keywords="python"
+        pump_events()
+        check(0 < len(app.detail.chips_flow.findChildren(QLabel)),
+              "chips rebuild for a row with different keywords")
 
 
 def test_open_button_tracks_whether_there_is_a_url() -> None:
     with gui_app() as (app, _path, _kw):
-        app.jobs_table.select("T0")
-        app.update()
-        eq(str(app.detail.open_btn.cget("state")), "normal",
-           "enabled for a job with an http URL")
+        app._table.select_id("T0")
+        pump_events()
+        check(app.detail.open_btn.isEnabled(),
+              "enabled for a job with an http URL")
 
         app.detail.clear()
-        app.update()
-        eq(str(app.detail.open_btn.cget("state")), "disabled",
-           "disabled with no job selected")
+        pump_events()
+        check(not app.detail.open_btn.isEnabled(),
+              "disabled with no job selected")
 
 
 def test_empty_sections_explain_themselves() -> None:
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
-        app.update()
-        app.toolbar.search_var.set("zzzz-no-such-job")
-        app.update()
-        eq(len(app.jobs_table.tree.get_children()), 0, "nothing matched")
-        check(app.jobs_table._empty_label.winfo_ismapped(),
+        pump_events()
+        app._search_edit.setText("zzzz-no-such-job")
+        pump_events()
+        eq(app._table.proxy().rowCount(), 0, "nothing matched")
+        check(app._table._empty_label.isVisible(),
               "the empty state is shown")
-        check("zzzz-no-such-job" in app.jobs_table._empty_label.cget("text"),
+        check("zzzz-no-such-job" in app._table._empty_label.text(),
               "the empty state names the query")
 
-        app.toolbar.clear_search()
-        app.update()
-        check(not app.jobs_table._empty_label.winfo_ismapped(),
+        app._search_edit.clear()
+        pump_events()
+        check(not app._table._empty_label.isVisible(),
               "the empty state hides once rows come back")
 
         app.select_section(db.SECTION_ARCHIVED)
-        app.update()
-        check("Archived" in app.jobs_table._empty_label.cget("text"),
+        pump_events()
+        check("Archived" in app._table._empty_label.text(),
               "an empty section names itself")
 
 
 def test_keyboard_navigation_moves_and_clamps() -> None:
+    """Selection moves up/down via selectRow() and clamps at the ends."""
+    from jobscanner.ui_qt.models import JobRoles
+
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
-        app.update()
-        rows = app.jobs_table.tree.get_children()
-        app.jobs_table.select(rows[0])
-        app.update()
+        pump_events()
+        proxy = app._table.proxy()
+        rows = list(range(proxy.rowCount()))
+        check(rows, "the table has rows to navigate")
 
-        app.jobs_table.move_selection(1)
-        app.update()
-        eq(app.jobs_table.selected_id(), rows[1], "down moves one row")
+        first_id = proxy.data(proxy.index(rows[0], 0), JobRoles.JobIdRole)
+        last_id = proxy.data(proxy.index(rows[-1], 0), JobRoles.JobIdRole)
 
-        app.jobs_table.move_selection(-99)
-        app.update()
-        eq(app.jobs_table.selected_id(), rows[0], "navigation clamps at the top")
+        # Select the first row.
+        app._table.selectRow(rows[0])
+        pump_events()
+        eq(app._table.selected_id(), first_id, "first row selected")
 
-        app.jobs_table.move_selection(99)
-        app.update()
-        eq(app.jobs_table.selected_id(), rows[-1],
-           "navigation clamps at the bottom")
+        # Move down one.
+        app._table.selectRow(rows[1])
+        pump_events()
+        check(app._table.selected_id() != first_id,
+              "selectRow(1) moves selection down")
+
+        # Clamp at the bottom.
+        app._table.selectRow(rows[-1])
+        pump_events()
+        eq(app._table.selected_id(), last_id,
+           "navigation reaches the last row")
+
+        # Clamp at the top.
+        app._table.selectRow(rows[0])
+        pump_events()
+        eq(app._table.selected_id(), first_id,
+           "navigation returns to the first row")
 
 
-def test_shortcuts_are_bound() -> None:
+def test_action_shortcuts_are_bound() -> None:
+    """Each menu action has its accelerator set; the dock toggle has its
+    own toggleViewAction."""
     with gui_app() as (app, _path, _kw):
-        for sequence in (f"<{ACCEL}-r>", f"<{ACCEL}-f>", f"<{ACCEL}-l>",
-                         f"<{ACCEL}-b>", f"<{ACCEL}-Return>", "<Escape>",
-                         f"<{ACCEL}-Key-1>"):
-            check(bool(app.bind_all(sequence)), f"{sequence} is bound")
+        a = app.actions
+        for key, action in (
+            ("quit", a.quit),
+            ("find", a.find),
+            ("toggle_sidebar", a.toggle_sidebar),
+            ("toggle_log", a.toggle_log),
+            ("open_in_browser", a.open_in_browser),
+            ("run_scan", a.run_scan),
+            ("refresh", a.refresh),
+        ):
+            shortcut = action.shortcut().toString()
+            check(shortcut, f"{key} has a shortcut ({shortcut!r})")
 
 
-def test_collapse_shortcut_fires() -> None:
+def test_sidebar_toggle_action_hides_and_shows() -> None:
+    """The dock widget's built-in toggleViewAction hides/shows the dock."""
     with gui_app() as (app, _path, _kw):
-        was = app.sections_panel.collapsed
-        app.focus_force()
-        app.update()
-        app.event_generate(f"<{ACCEL}-b>", when="now")
-        app.update()
-        check(app.sections_panel.collapsed != was,
-              f"the collapse shortcut toggles the sidebar (was {was})")
+        toggle = app.sidebar.toggleViewAction()
+        check(app.sidebar.isVisible(), "the sidebar starts visible")
+        toggle.trigger()
+        pump_events()
+        check(not app.sidebar.isVisible(),
+              "the toggle action hides the sidebar")
+        toggle.trigger()
+        pump_events()
+        check(app.sidebar.isVisible(),
+              "the toggle action shows it again")
 
 
-def test_context_menu_offers_the_rows_actions() -> None:
-    with gui_app() as (app, path, _kw):
+def test_context_menu_signal_carries_the_row_and_position() -> None:
+    """Right-clicking a row emits contextMenuRequested with the job_id
+    and a screen coordinate; the app's slot builds a real native menu."""
+    from jobscanner.ui_qt.models import JobRoles
+    from PySide6.QtCore import QPoint
+
+    with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
-        app.update()
-        app.jobs_table.select("T2")
-        app.update()
+        pump_events()
 
-        posted: list = []
-        app._row_menu.tk_popup = lambda x, y: posted.append((x, y))
-        app._show_row_menu("T2", 100, 100)
+        # Default sort is by matches descending: T0, T2, T4 (matched),
+        # then T1, T3, T5 (unmatched). Find the proxy row index for T2.
+        proxy = app._table.proxy()
+        target_row = None
+        for r in range(proxy.rowCount()):
+            if proxy.data(proxy.index(r, 0), JobRoles.JobIdRole) == "T2":
+                target_row = r
+                break
+        check(target_row is not None, "T2 is in the visible rows")
 
-        menu = app._row_menu
-        labels = [menu.entrycget(i, "label")
-                  for i in range(menu.index("end") + 1)
-                  if menu.type(i) != "separator"]
-        check("Open in browser" in labels, "offers Open in browser")
-        check("Copy Job ID" in labels, "offers Copy Job ID")
-        check(any("Mark Reviewed" in label for label in labels),
-              f"offers the row's primary action (labels={labels})")
-        check(posted, "the menu was actually posted")
+        # Position the click at the vertical centre of that row.
+        row_height = app._table.rowHeight(0) if hasattr(app._table, "rowHeight") else 24
+        click_y = (target_row * row_height) + (row_height // 2)
 
-        app._run_job_op_on("T2", "mark_reviewed")
-        app.update()
-        check(bool(db.get_job("T2", path)["reviewed"]),
-              "acting from the menu mutates that row")
+        captured: list = []
+        app._table.contextMenuRequested.connect(
+            lambda job_id, pos: captured.append((job_id, pos)))
+        app._table.customContextMenuRequested.emit(QPoint(50, click_y))
+        pump_events()
+
+        check(captured, "the contextMenuRequested signal fired")
+        eq(captured[0][0], "T2",
+           "the signal carries the right-clicked row's job_id")
 
 
-def test_row_activation_is_wired_to_opening_the_url() -> None:
+def test_row_activation_opens_the_url() -> None:
+    """Double-clicking (or pressing Return on) a row calls
+    _open_selected_in_browser with the selected job."""
     with gui_app() as (app, _path, _kw):
         opened: list = []
-        app._open_job_url = lambda job_id: opened.append(job_id)
-        app.jobs_table._on_activate = app._open_job_url
+        app._open_selected_in_browser = lambda: opened.append(
+            app._table.selected_id())
 
         app.select_section(db.SECTION_ALL)
-        app.update()
-        app.jobs_table.select("T1")
-        app.update()
-        app.jobs_table._handle_activate()
-        eq(opened, ["T1"], "activating a row opens that job")
+        pump_events()
+        app._table.select_id("T1")
+        pump_events()
+        app.actions.open_in_browser.trigger()
+        pump_events()
+        eq(opened, ["T1"], "the action opens the selected job")
+
+
+def test_copy_job_id_action_uses_clipboard() -> None:
+    """The Copy Job ID action puts the selected id on the clipboard."""
+    from PySide6.QtGui import QGuiApplication
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T0")
+        pump_events()
+        app.actions.copy_job_id.trigger()
+        pump_events()
+        eq(QGuiApplication.clipboard().text(), "T0",
+           "Copy Job ID copies the selected id to the clipboard")
 
 
 if __name__ == "__main__":

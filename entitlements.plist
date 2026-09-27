@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- PyInstaller-produced .app bundles ship their own Qt frameworks
+         (PySide6 ships them as un-signed, un-notarised nested .framework
+         directories). We disable library-validation so Apple's
+         hardened-runtime check accepts them. -->
+
+    <!-- Qt may JIT-compile code paths; allow it. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Required alongside com.apple.security.cs.allow-jit for Qt's
+         runtime codegen. -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- PyInstaller bundles Qt's frameworks without re-signing each
+         nested one; disable the library-validation check. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- The app makes outbound HTTPS calls to secure.osfa.illinois.edu
+         when it runs a scan. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- The app does not run a server and does not need to access
+         the user's microphone, camera, contacts, etc. -->
+</dict>
+</plist>
