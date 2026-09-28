@@ -17,6 +17,15 @@ from PySide6.QtCore import Qt
 from support import check, eq, gui_app, gui_available, pump_events, run_module  # noqa: E402
 
 from jobscanner import storage as db  # noqa: E402
+from jobscanner.ui_qt.models import COLUMNS  # noqa: E402
+
+
+def _col(key: str) -> int:
+    """Index of a column by key -- never hardcode positions."""
+    for i, column in enumerate(COLUMNS):
+        if column.key == key:
+            return i
+    raise AssertionError(f"no {key!r} column")
 from jobscanner.ui_qt import job_actions as ja  # noqa: E402
 from jobscanner.ui_qt.models import SORT_ROLE, JobRoles  # noqa: E402
 
@@ -144,17 +153,44 @@ def test_follow_up_presets_each_get_their_own_cell() -> None:
         dialog.close()
 
 
+def test_source_column_shows_a_readable_label() -> None:
+    """Rows are keyed 'rp:48827'; the table shows the board's name and the
+    bare id rather than repeating the prefix."""
+    from jobscanner.sources import SOURCE_LABELS
+
+    with gui_app() as (app, path, _kw):
+        db.upsert_listing(
+            {"job_id": "rp:48827", "title": "Hardware Engineer",
+             "company": "Philowave", "date_posted": "",
+             "detail_url": "https://e.org", "source": "rp"},
+            path=path,
+        )
+        app.select_section(db.SECTION_ALL)
+        app.refresh()
+        pump_events()
+
+        proxy = app._table.proxy()
+        found = False
+        for r in range(proxy.rowCount()):
+            job_id = proxy.data(proxy.index(r, _col("job_id")))
+            source = proxy.data(proxy.index(r, _col("source")))
+            if source == SOURCE_LABELS["rp"]:
+                eq(job_id, "48827", "the id column drops the source prefix")
+                found = True
+        check(found, "the Research Park row shows its board label")
+
+
 def test_sorting_toggles_and_survives_refresh() -> None:
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
         pump_events()
 
-        # JOB_ID is column 0 in COLUMNS.
-        app._table.sortByColumn(0, Qt.AscendingOrder)
+        job_id_col = _col("job_id")
+        app._table.sortByColumn(job_id_col, Qt.AscendingOrder)
         pump_events()
         ascending = _row_ids(app)
 
-        app._table.sortByColumn(0, Qt.DescendingOrder)
+        app._table.sortByColumn(job_id_col, Qt.DescendingOrder)
         pump_events()
         descending = _row_ids(app)
 
@@ -177,8 +213,7 @@ def test_default_sort_is_applied_on_open() -> None:
     """Regression: 'matches' was declared descending-first but no sort ran
     until the user clicked a header, so the table opened in DB order."""
     with gui_app() as (app, _path, _kw):
-        # The "matches" column is index 3 in COLUMNS.
-        eq(app._table.proxy().sortColumn(), 3,
+        eq(app._table.proxy().sortColumn(), _col("matches"),
            "opens sorted by matches")
         eq(app._table.proxy().sortOrder(), Qt.DescendingOrder,
            "matches sorts descending first")
@@ -187,7 +222,7 @@ def test_default_sort_is_applied_on_open() -> None:
         pump_events()
         proxy = app._table.proxy()
         counts = [
-            int(proxy.data(proxy.index(r, 3), SORT_ROLE) or 0)
+            int(proxy.data(proxy.index(r, _col("matches")), SORT_ROLE) or 0)
             for r in range(proxy.rowCount())
         ]
         eq(counts, sorted(counts, reverse=True),
