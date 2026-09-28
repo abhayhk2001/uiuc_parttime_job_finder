@@ -31,12 +31,16 @@ from jobscanner.ui_qt.models import SORT_ROLE, JobRoles  # noqa: E402
 
 
 def _row_ids(app) -> list[str]:
-    """Return the visible job_ids in the table in current sort order."""
-    proxy = app._table.proxy()
-    return [
-        proxy.data(proxy.index(r, 0), JobRoles.JobIdRole)
-        for r in range(proxy.rowCount())
-    ]
+    """Visible job_ids in display order, sections flattened.
+
+    Rows are grouped per source, so proxy().rowCount() counts *sections*;
+    the view exposes this walk so tests never do it by hand.
+    """
+    return app._table.visible_job_ids()
+
+
+def _job_count(app) -> int:
+    return app._table.visible_job_count()
 
 
 def test_each_section_queries_without_error() -> None:
@@ -47,16 +51,14 @@ def test_each_section_queries_without_error() -> None:
             eq(app._section, section, "section should be selected")
         app.select_section(db.SECTION_ALL)
         pump_events()
-        eq(app._table.proxy().rowCount(), 6,
-           "All should list every seeded job")
+        eq(_job_count(app), 6, "All should list every seeded job")
 
 
 def test_selecting_a_row_populates_the_detail_pane() -> None:
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
         pump_events()
-        eq(app._table.proxy().rowCount(), 6,
-           "all seeded rows are in the All section")
+        eq(_job_count(app), 6, "all seeded rows are in the All section")
         app._table.select_id("T0")
         pump_events()
         eq(app.detail.job_id, "T0", "detail should follow the selection")
@@ -153,31 +155,48 @@ def test_follow_up_presets_each_get_their_own_cell() -> None:
         dialog.close()
 
 
-def test_source_column_shows_a_readable_label() -> None:
-    """Rows are keyed 'rp:48827'; the table shows the board's name and the
-    bare id rather than repeating the prefix."""
+def test_sections_are_grouped_by_source_in_registry_order() -> None:
+    """Rows are grouped into a collapsible section per board. The source has
+    no column of its own -- the board's name is the section heading."""
     from jobscanner.sources import SOURCE_LABELS
 
     with gui_app() as (app, path, _kw):
-        db.upsert_listing(
-            {"job_id": "rp:48827", "title": "Hardware Engineer",
-             "company": "Philowave", "date_posted": "",
-             "detail_url": "https://e.org", "source": "rp"},
-            path=path,
-        )
+        for job_id, source in (("rp:48827", "rp"), ("ach:70", "ach")):
+            db.upsert_listing(
+                {"job_id": job_id, "title": f"Job {job_id}", "company": "X",
+                 "date_posted": "", "detail_url": "https://e.org",
+                 "source": source},
+                path=path,
+            )
         app.select_section(db.SECTION_ALL)
         app.refresh()
         pump_events()
 
-        proxy = app._table.proxy()
-        found = False
-        for r in range(proxy.rowCount()):
-            job_id = proxy.data(proxy.index(r, _col("job_id")))
-            source = proxy.data(proxy.index(r, _col("source")))
-            if source == SOURCE_LABELS["rp"]:
-                eq(job_id, "48827", "the id column drops the source prefix")
-                found = True
-        check(found, "the Research Park row shows its board label")
+        table = app._table
+        # Seeded rows are vjb; plus the rp and ach rows just added.
+        eq(table.visible_group_keys(), ["vjb", "rp", "ach"],
+           "sections follow registry order, not alphabetical")
+        eq(table.proxy().rowCount(), 3, "one section per source present")
+
+        model = table.source_model()
+        headings = []
+        for i in range(table.proxy().rowCount()):
+            src = table.proxy().mapToSource(table.proxy().index(i, 0))
+            headings.append(model.group_at(src.row()).heading)
+        check(any(SOURCE_LABELS["rp"] in h and "(1)" in h for h in headings),
+              f"the Research Park heading carries its count ({headings})")
+
+        check("source" not in [c.key for c in COLUMNS],
+              "source must not also be a column")
+
+        # A section heading is not a job.
+        group_idx = table.proxy().index(0, 0)
+        check(table.proxy().data(group_idx, JobRoles.JobIdRole) is None,
+              "a heading has no job id")
+        table.setCurrentIndex(group_idx)
+        pump_events()
+        check(table.selected_id() is None,
+              "selecting a heading selects no job")
 
 
 def test_sorting_toggles_and_survives_refresh() -> None:
@@ -197,7 +216,6 @@ def test_sorting_toggles_and_survives_refresh() -> None:
         eq(ascending, list(reversed(descending)),
            "clicking the same header twice flips direction")
 
-        hh = app._table.horizontalHeader()
         # Qt's sort indicator is on the model side, not the header.
         eq(app._table.proxy().sortOrder(), Qt.DescendingOrder,
            "proxy reflects the most recent sort direction")
@@ -206,7 +224,8 @@ def test_sorting_toggles_and_survives_refresh() -> None:
         pump_events()
         eq(_row_ids(app), descending,
            "the chosen sort survives a refresh")
-        del hh  # unused, kept for clarity in the test
+        eq(app._table.visible_group_keys(), ["vjb"],
+           "sorting must not reshuffle the sections")
 
 
 def test_default_sort_is_applied_on_open() -> None:
@@ -221,9 +240,10 @@ def test_default_sort_is_applied_on_open() -> None:
         app.select_section(db.SECTION_ALL)
         pump_events()
         proxy = app._table.proxy()
+        parent = proxy.index(0, 0)  # the single seeded section
         counts = [
-            int(proxy.data(proxy.index(r, _col("matches")), SORT_ROLE) or 0)
-            for r in range(proxy.rowCount())
+            int(proxy.data(proxy.index(r, _col("matches"), parent), SORT_ROLE) or 0)
+            for r in range(proxy.rowCount(parent))
         ]
         eq(counts, sorted(counts, reverse=True),
            f"rows are ordered by match count on open ({counts})")
@@ -235,16 +255,16 @@ def test_search_and_matches_only_filters() -> None:
         pump_events()
         app._search_edit.setText("Job 3")
         pump_events()
-        eq(app._table.proxy().rowCount(), 1, "search narrows the table")
+        eq(_job_count(app), 1, "search narrows the table")
 
         app._search_edit.clear()
         pump_events()
-        eq(app._table.proxy().rowCount(), 6, "clearing restores rows")
+        eq(_job_count(app), 6, "clearing restores rows")
 
         app._matches_only.setChecked(True)
         app.refresh()
         pump_events()
-        eq(app._table.proxy().rowCount(), 3,
+        eq(_job_count(app), 3,
            "matches-only keeps the 3 matching rows")
 
 

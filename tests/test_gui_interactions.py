@@ -65,7 +65,7 @@ def test_empty_sections_explain_themselves() -> None:
         pump_events()
         app._search_edit.setText("zzzz-no-such-job")
         pump_events()
-        eq(app._table.proxy().rowCount(), 0, "nothing matched")
+        eq(app._table.visible_job_count(), 0, "nothing matched")
         check(app._table._empty_label.isVisible(),
               "the empty state is shown")
         check("zzzz-no-such-job" in app._table._empty_label.text(),
@@ -82,42 +82,29 @@ def test_empty_sections_explain_themselves() -> None:
               "an empty section names itself")
 
 
-def test_keyboard_navigation_moves_and_clamps() -> None:
-    """Selection moves up/down via selectRow() and clamps at the ends."""
-    from jobscanner.ui_qt.models import JobRoles
-
+def test_selection_moves_between_jobs_across_sections() -> None:
+    """Rows live under section headings now, so selection is driven by
+    job id rather than a flat row number."""
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
         pump_events()
-        proxy = app._table.proxy()
-        rows = list(range(proxy.rowCount()))
-        check(rows, "the table has rows to navigate")
+        ids = app._table.visible_job_ids()
+        check(len(ids) >= 2, f"need rows to navigate (got {ids})")
 
-        first_id = proxy.data(proxy.index(rows[0], 0), JobRoles.JobIdRole)
-        last_id = proxy.data(proxy.index(rows[-1], 0), JobRoles.JobIdRole)
-
-        # Select the first row.
-        app._table.selectRow(rows[0])
+        check(app._table.select_id(ids[0]), "first job selectable")
         pump_events()
-        eq(app._table.selected_id(), first_id, "first row selected")
+        eq(app._table.selected_id(), ids[0], "first job selected")
 
-        # Move down one.
-        app._table.selectRow(rows[1])
+        check(app._table.select_id(ids[1]), "second job selectable")
         pump_events()
-        check(app._table.selected_id() != first_id,
-              "selectRow(1) moves selection down")
+        eq(app._table.selected_id(), ids[1], "selection moved")
 
-        # Clamp at the bottom.
-        app._table.selectRow(rows[-1])
+        check(app._table.select_id(ids[-1]), "last job selectable")
         pump_events()
-        eq(app._table.selected_id(), last_id,
-           "navigation reaches the last row")
+        eq(app._table.selected_id(), ids[-1], "selection reaches the last job")
 
-        # Clamp at the top.
-        app._table.selectRow(rows[0])
-        pump_events()
-        eq(app._table.selected_id(), first_id,
-           "navigation returns to the first row")
+        eq(app._table.select_id("no-such-job"), False,
+           "an unknown id selects nothing")
 
 
 def test_action_shortcuts_are_bound() -> None:
@@ -163,24 +150,29 @@ def test_context_menu_signal_carries_the_row_and_position() -> None:
         app.select_section(db.SECTION_ALL)
         pump_events()
 
-        # Default sort is by matches descending: T0, T2, T4 (matched),
-        # then T1, T3, T5 (unmatched). Find the proxy row index for T2.
+        # T2 sits under its section heading, so walk the one seeded group.
         proxy = app._table.proxy()
-        target_row = None
-        for r in range(proxy.rowCount()):
-            if proxy.data(proxy.index(r, 0), JobRoles.JobIdRole) == "T2":
-                target_row = r
+        parent = proxy.index(0, 0)
+        target = None
+        for r in range(proxy.rowCount(parent)):
+            idx = proxy.index(r, 0, parent)
+            if proxy.data(idx, JobRoles.JobIdRole) == "T2":
+                target = idx
                 break
-        check(target_row is not None, "T2 is in the visible rows")
+        check(target is not None, "T2 is in the visible rows")
 
-        # Position the click at the vertical centre of that row.
-        row_height = app._table.rowHeight(0) if hasattr(app._table, "rowHeight") else 24
-        click_y = (target_row * row_height) + (row_height // 2)
+        # Ask the view where that row actually is, rather than computing it
+        # from a row height -- a tree indents and offsets its children.
+        rect = app._table.visualRect(target)
+        check(rect.isValid() and rect.height() > 0,
+              "the target row has a visible rect")
+        click_y = rect.center().y()
 
         captured: list = []
         app._table.contextMenuRequested.connect(
             lambda job_id, pos: captured.append((job_id, pos)))
-        app._table.customContextMenuRequested.emit(QPoint(50, click_y))
+        app._table.customContextMenuRequested.emit(
+            QPoint(rect.center().x(), click_y))
         pump_events()
 
         check(captured, "the contextMenuRequested signal fired")

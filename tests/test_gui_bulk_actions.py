@@ -162,7 +162,7 @@ def test_all_section_is_available_and_counted() -> None:
 
         app.select_section(db.SECTION_ALL)
         pump_events()
-        eq(app._table.proxy().rowCount(), 6, "All lists every job")
+        eq(app._table.visible_job_count(), 6, "All lists every job")
 
 
 def test_status_message_after_bulk_action() -> None:

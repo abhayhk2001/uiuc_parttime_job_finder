@@ -24,6 +24,7 @@ def fake_rows() -> list[dict]:
     return [
         {
             "job_id": "T0",
+            "source": "vjb",
             "title": "Backend Engineer (Python)",
             "company": "Acme Corp",
             "job_description": "Build APIs in Flask and FastAPI.",
@@ -38,6 +39,7 @@ def fake_rows() -> list[dict]:
         },
         {
             "job_id": "T1",
+            "source": "vjb",
             "title": "Data Scientist Intern",
             "company": "Globex",
             "job_description": "Work on machine learning pipelines.",
@@ -52,6 +54,7 @@ def fake_rows() -> list[dict]:
         },
         {
             "job_id": "T2",
+            "source": "rp",
             "title": "SWE Intern",
             "company": "Initech",
             "job_description": "Internal tools in Go.",
@@ -66,6 +69,7 @@ def fake_rows() -> list[dict]:
         },
         {
             "job_id": "T3",
+            "source": "rp",
             "title": "Research Assistant - HCI",
             "company": "Stark Industries",
             "job_description": "Conduct user studies; Python scripting.",
@@ -179,10 +183,15 @@ def main() -> int:
     app.processEvents()
     view.set_rows(fake_rows())
     app.processEvents()
-    assert view.proxy().rowCount() == 4
+    # The view groups by source, so proxy().rowCount() counts *sections*;
+    # visible_job_count() is the number of jobs.
+    assert view.proxy().rowCount() == 2, view.proxy().rowCount()
+    assert view.visible_job_count() == 4, view.visible_job_count()
+    assert view.visible_group_keys() == ["vjb", "rp"], view.visible_group_keys()
     sel = view.selected_id()
     assert sel is None
-    print(f"view rowCount={view.proxy().rowCount()}, initial selection={sel}")
+    print(f"view sections={view.visible_group_keys()} "
+          f"jobs={view.visible_job_count()}, initial selection={sel}")
 
     # Select T2 and verify
     assert view.select_id("T2")
@@ -192,17 +201,22 @@ def main() -> int:
     print(f"view selected {view.selected_id()} ({view.current_job_dict()['company']})")
 
     # Sorting: click 'matches' header, verify T3 (3) > T0 (2) > T1 (1) > T2 (0)
-    view.sortByColumn(3, Qt.DescendingOrder)
+    matches_col = [c.key for c in COLUMNS].index("matches")
+    view.sortByColumn(matches_col, Qt.DescendingOrder)
     app.processEvents()
-    top_id = view.proxy().data(view.proxy().index(0, 0), JobRoles.JobIdRole)
-    assert top_id == "T3", top_id
-    print(f"view sorted by matches desc -> top = {top_id}")
+    ids = view.visible_job_ids()
+    # Sorting happens inside each section: vjb holds T0/T1, rp holds T2/T3.
+    assert ids[0] == "T0", ids       # 2 matches beats T1's 1
+    assert ids[2] == "T3", ids       # 3 matches beats T2's 0
+    assert view.visible_group_keys() == ["vjb", "rp"], "sections stay put"
+    print(f"view sorted by matches desc -> {ids}")
 
     # Empty state
     view.set_rows([])
     view.set_empty_message("No matching jobs.")
     app.processEvents()
     assert view.proxy().rowCount() == 0
+    assert view.visible_job_count() == 0
     print("view empty state OK")
 
     # Re-populate so we have rows to test foreground on.
@@ -215,9 +229,13 @@ def main() -> int:
     view.refresh_palette()
     app.processEvents()
     # The ForegroundRole for a matched-unreviewed row should still be a
-    # valid QColor (palette.MATCH_FG in dark mode).
-    fg = view.source_model().data(
-        view.source_model().index(0, 0), Qt.ForegroundRole)
+    # valid QColor (palette.MATCH_FG in dark mode). index(0, 0) is now a
+    # section heading, so reach into its first job.
+    model = view.source_model()
+    first_job = model.index(0, 0, model.index(0, 0))
+    assert model.data(first_job, JobRoles.JobIdRole) == "T0", \
+        model.data(first_job, JobRoles.JobIdRole)
+    fg = model.data(first_job, Qt.ForegroundRole)
     if hasattr(fg, "name"):
         print(f"dark-mode foreground after refresh = {fg.name()}")
         assert fg.name().lower() == palette.DARK["match_fg"].lower()
