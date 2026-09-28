@@ -30,6 +30,28 @@ MAX_RETRIES = 3
 # default `follow_up_at = applied_at + FOLLOW_UP_WINDOW_DAYS`.
 FOLLOW_UP_WINDOW_DAYS = 7
 
+def _accept_encoding() -> str:
+    """Advertise only the encodings this install can actually decode.
+
+    This header used to hardcode "gzip, deflate, br". requests decodes
+    brotli only when the brotli (or brotlicffi) package is present, and it
+    is not a dependency here -- so any server that honoured the `br` offer
+    handed back bytes we could not read. VJB never uses brotli so nothing
+    broke; Research Park does, and its pages silently arrived as garbage.
+    """
+    encodings = ["gzip", "deflate"]
+    for module in ("brotli", "brotlicffi"):
+        try:
+            __import__(module)
+        except ImportError:
+            continue
+        encodings.append("br")
+        break
+    return ", ".join(encodings)
+
+
+_ACCEPT_ENCODING = _accept_encoding()
+
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -41,7 +63,7 @@ DEFAULT_HEADERS = {
         "image/avif,image/webp,*/*;q=0.8"
     ),
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": _ACCEPT_ENCODING,
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
 }
