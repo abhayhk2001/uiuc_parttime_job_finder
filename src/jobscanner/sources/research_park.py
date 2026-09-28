@@ -96,8 +96,9 @@ def _parse_rows(html: str) -> list[ListingRow]:
         posted = li.select_one(".posted-on span")
         desc = li.select_one(".description")
         rows.append(ListingRow(
-            # The listing markup carries no id; the URL slug is stable and
-            # is replaced by the numeric post id once the detail is read.
+            # The listing markup carries no id, so the URL slug is the key.
+            # It is unique per posting and is the only identifier available
+            # without fetching every detail page.
             native_id=slugify(url.rstrip("/").split("/")[-1] or title),
             title=title,
             detail_url=url,
@@ -156,12 +157,17 @@ def fetch_detail(row: ListingRow) -> Detail:
         # the board's own metadata for logging.
         identifier = posting.get("identifier") or {}
         if isinstance(identifier, dict):
-            # WordPress leaves the ampersand HTML-escaped inside the JSON-LD
+            # The numeric WordPress post id. Recorded as metadata only --
+            # it must NOT become the row's native_id. The listing page only
+            # ever exposes the URL slug, so re-keying a row here would make
+            # the next scan see the slug as unknown and insert the job a
+            # second time, every single scan.
+            # WordPress leaves the ampersand HTML-escaped in the JSON-LD
             # ("...&#038;p=48827"), so unescape before matching on "&p=".
             value = html_module.unescape(str(identifier.get("value", "")))
             m = _POST_ID_RE.search(value)
             if m:
-                row.native_id = m.group(1)
+                row.extra["post_id"] = m.group(1)
         org = posting.get("hiringOrganization") or {}
         if isinstance(org, dict) and org.get("name"):
             row.company = clean(str(org["name"]))
