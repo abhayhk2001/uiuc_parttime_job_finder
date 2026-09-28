@@ -53,7 +53,9 @@ from jobscanner.storage.meta import (
     set_meta,
     set_sash_widths,
 )
-from jobscanner.storage.schema import SCHEMA, _connect, connect, init_db
+from jobscanner.storage.schema import (
+    LEGACY_SOURCE, SCHEMA, _connect, connect, init_db,
+)
 from jobscanner.storage.sections import (
     COUNTED_SECTIONS,
     SECTION_ALL,
@@ -79,7 +81,7 @@ _add_days_iso = add_days_iso
 
 __all__ = [
     # schema
-    "SCHEMA", "init_db", "connect", "_connect",
+    "SCHEMA", "init_db", "connect", "_connect", "LEGACY_SOURCE",
     # time
     "now_iso", "add_days_iso",
     # meta

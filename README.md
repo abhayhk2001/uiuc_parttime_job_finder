@@ -1,6 +1,34 @@
 # UIUC Virtual Job Board Scanner
 
-A lightweight Python tool that crawls the **Other University Positions** section of the [UIUC Virtual Job Board](https://secure.osfa.illinois.edu/vjb/), mirrors every posting into a local SQLite database indexed by `Job ID`, scrapes each new posting's **Job Description / Requirements / Skills**, and matches them against your keyword list. Ships with both a terminal scanner and a native PySide6 (Qt) GUI.
+A lightweight Python tool that crawls several UIUC job boards, mirrors every posting into a local SQLite database, scrapes each new posting's text, and matches it against your keyword list. Ships with both a terminal scanner and a native PySide6 (Qt) GUI.
+
+## Sources
+
+| Source | Key | What it reads | Detail text |
+| --- | --- | --- | --- |
+| [Virtual Job Board](https://secure.osfa.illinois.edu/vjb/) | `vjb` | "Other University Positions" | Description / Requirements / Skills |
+| [Research Park](https://researchpark.illinois.edu/work-here/careers/) | `rp` | The whole job board, all employment types | Full text from the page's JSON-LD |
+| [Assistantship Clearinghouse](https://grad.illinois.edu/funding/assistantships/assistantship-clearinghouse) | `ach` | Graduate assistantships | Listing teaser only |
+| [University Library](https://www.library.illinois.edu/libinfo/about/library-employment/) | `lib` | Academic hourly, graduate assistantships, graduate hourly | Listing text only |
+
+Notes on the newer three:
+
+- **Research Park** serves no listings in its HTML — it is WP Job Manager loading
+  over AJAX, so the scanner calls the plugin's `get_listings` endpoint directly.
+  Detail pages carry `schema.org/JobPosting` JSON-LD, which is what gets parsed:
+  full description, ISO posting date, employment type and expiry.
+- **Clearinghouse** postings are read from the listing only. Detail pages sit
+  behind a campus login, so the short listing teaser is the text keyword matching
+  sees.
+- **Library** pages are hand-authored and usually read "Current Openings / None".
+  The parser anchors on that heading and handles the shapes a WordPress editor
+  produces. It had no populated page to be written against, so when it finds
+  content it cannot parse it says so loudly on stderr rather than importing
+  nothing silently.
+
+Each source is scanned independently: one board failing is logged and skipped, and
+never archives its own jobs on evidence it did not gather. Adding a source means
+writing one module under `src/jobscanner/sources/` and listing it in `SOURCES`.
 
 ## Requirements
 
@@ -47,14 +75,18 @@ When run interactively, `python main.py` performs the scan and then opens the GU
 ## Data flow
 
 ```
-[ VJB web site ] ──(requests)──► scraper.session ──(BeautifulSoup)──► scraper.parsing
-                                                                           │
-              ▼                                                             ▼
-       alerts (sound/console)                                        storage (SQLite)
-              ▲                                                             │
-              └──────────────── matching ◄──── keywords.json ◄─────────────┘
+[ VJB ]  [ Research Park ]  [ Clearinghouse ]  [ Library ]
+   │             │                  │               │
+   └─────────────┴────────┬─────────┴───────────────┘
+                          ▼
+                  sources/<board>.py        (requests + BeautifulSoup)
+                          │  ListingRow / Detail
+                          ▼
+   alerts ◄────────── pipeline ──────────► storage (SQLite)
+ (sound/console)          │                       │
+                          └── matching ◄── keywords.json
                                     │
-                                     └─► ui_qt (PySide6 / Qt)
+                                    └─► ui_qt (PySide6 / Qt)
 
               cli ──► pipeline ──► everything above
 ```
@@ -218,7 +250,13 @@ src/jobscanner/
   pipeline.py             a scan: fetch, diff, backfill, match, alert, auto-archive
   matching.py             case-insensitive keyword matching + rematch_all
   alerts.py               macOS sound + console summary (V2: WhatsApp bot)
-  scraper/
+  sources/                one module per job board; add a board here
+    base.py               the Source interface + ListingRow / Detail shapes
+    vjb.py                Virtual Job Board (wraps scraper/)
+    research_park.py      WP Job Manager AJAX + JSON-LD detail
+    clearinghouse.py      Drupal listing (listing-only)
+    library.py            defensive "Current Openings" parser
+  scraper/                VJB-specific HTTP + HTML, used by sources/vjb.py
     session.py            ASP.NET WebForms session (GET home, POST listing, GET detail)
     parsing.py            HTML -> dict (listing rows + detail rows)
   storage/                SQLite layer; __init__ re-exports the whole API
@@ -251,7 +289,8 @@ Created automatically; idempotent migrations add the `reviewed` and `to_apply` c
 
 | Column            | Type | Notes                                            |
 | ----------------- | ---- | ------------------------------------------------ |
-| `job_id`          | TEXT | Primary key, from VJB.                           |
+| `job_id`          | TEXT | Primary key, namespaced as `<source>:<native id>` (e.g. `vjb:48447`, `rp:hardware-fpga-engineer`). Bare ids from before multi-source support are migrated on first run. |
+| `source`          | TEXT | Which board the row came from: `vjb` / `rp` / `ach` / `lib`. |
 | `title`           | TEXT |                                                  |
 | `company`         | TEXT |                                                  |
 | `date_posted`     | TEXT |                                                  |
@@ -317,7 +356,7 @@ A scan writes to the DB in several places (`init_db` migrations, `upsert_listing
 ## Tests
 
 ```bash
-pytest tests/                               # everything (57 tests)
+pytest tests/                               # everything (78 tests)
 pytest tests/test_db_isolated.py           # storage layer only
 python tests/test_gui_workflow.py          # one module, as a plain script
 python tests/test_gui_bulk_actions.py
@@ -327,11 +366,12 @@ python tests/smoke_skeleton.py             # standalone smoke (no DB needed)
 python tests/smoke_table.py
 ```
 
-57 tests in five layers:
+78 tests in six layers:
 
 | Module | Covers |
 | ------ | ------ |
-| `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune |
+| `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune, id namespacing and per-source archiving |
+| `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards and the optional Clearinghouse deadline |
 | `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Follow Up → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings |
 | `test_gui_bulk_actions.py` | Every registered bulk action, both confirmation paths, the status-bar toast, the All section |
 | `test_gui_interactions.py` | Chip reuse across same-keyword refreshes, empty-state explanation, action shortcuts, context-menu signal, dock toggle, clipboard copy, the open-in-browser action |

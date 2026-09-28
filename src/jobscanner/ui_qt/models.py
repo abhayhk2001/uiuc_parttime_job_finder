@@ -28,6 +28,7 @@ from typing import Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
 
+from jobscanner.sources import SOURCE_LABELS
 from jobscanner.ui_qt import theme
 
 
@@ -55,7 +56,8 @@ class Column:
 
 
 COLUMNS: tuple[Column, ...] = (
-    Column("job_id", "Job ID", 80, right_aligned=True),
+    Column("source", "Source", 110),
+    Column("job_id", "Job ID", 110, right_aligned=True),
     Column("title", "Title", 380),
     Column("company", "Company", 200),
     Column("matches", "Matches", 70, right_aligned=True, numeric=True),
@@ -169,8 +171,12 @@ class JobsTableModel(QAbstractTableModel):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.ToolTipRole and col.key == "title":
             return row_dict.get("title") or ""
+        if role == Qt.ToolTipRole and col.key == "source":
+            return SOURCE_LABELS.get(row_dict.get("source") or "", "")
 
         if role == SORT_ROLE:
+            if col.key == "source":
+                return (row_dict.get("source") or "").lower()
             if col.key == "matches":
                 return match_count
             if col.key == "reviewed":
@@ -179,6 +185,14 @@ class JobsTableModel(QAbstractTableModel):
             return value.lower() if isinstance(value, str) else value
 
         if role == Qt.DisplayRole:
+            if col.key == "source":
+                key = row_dict.get("source") or ""
+                return SOURCE_LABELS.get(key, key)
+            if col.key == "job_id":
+                # Ids are namespaced ("rp:48827"); the prefix is already
+                # shown in its own column, so don't repeat it here.
+                job_id = row_dict.get("job_id", "") or ""
+                return job_id.split(":", 1)[1] if ":" in job_id else job_id
             if col.key == "title":
                 return (row_dict.get("title") or "")[:80]
             if col.key == "company":

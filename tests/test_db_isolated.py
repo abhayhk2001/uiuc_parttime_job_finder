@@ -416,7 +416,7 @@ def test_auto_archive_removed_jobs_archives_only_active_rows() -> None:
         # D stays unreviewed (in New/Old).
 
         cutoff = "2026-09-23T00:00:00+00:00"  # newer than last_seen_at
-        archived_n = db.auto_archive_removed_jobs(cutoff, p)
+        archived_n = db.auto_archive_removed_jobs(cutoff, "vjb", p)
         _eq(archived_n, 3, "A, B, C should auto-archive; D stays unreviewed")
 
         rows = {r["job_id"]: r for r in db.get_all_jobs(p)}
@@ -426,8 +426,86 @@ def test_auto_archive_removed_jobs_archives_only_active_rows() -> None:
         _check(rows["D"]["archived"] == 0, "D should NOT be archived")
 
         # No-op when cutoff is empty.
-        _eq(db.auto_archive_removed_jobs("", p), 0,
+        _eq(db.auto_archive_removed_jobs("", "vjb", p), 0,
             "empty cutoff should be a no-op")
+
+
+def test_legacy_ids_are_namespaced_once() -> None:
+    """Pre-multi-source rows gain a 'vjb:' prefix, and re-running init_db
+    must never double-prefix them."""
+    with _TempDB() as p:
+        db.init_db(p)
+        # Simulate a pre-migration database: bare, un-namespaced ids.
+        now = db.now_iso()
+        with sqlite3.connect(p) as conn:
+            for jid in ("48447", "48448"):
+                conn.execute(
+                    "INSERT INTO jobs (job_id, title, company, date_posted, "
+                    "detail_url, first_seen_at, last_seen_at, reviewed) "
+                    "VALUES (?, ?, '', '', '', ?, ?, 1)",
+                    (jid, f"Job {jid}", now, now),
+                )
+            conn.commit()
+
+        db.init_db(p)
+        ids = sorted(r["job_id"] for r in db.get_all_jobs(p))
+        _eq(ids, ["vjb:48447", "vjb:48448"], "legacy ids should be prefixed")
+
+        db.init_db(p)
+        db.init_db(p)
+        ids = sorted(r["job_id"] for r in db.get_all_jobs(p))
+        _eq(ids, ["vjb:48447", "vjb:48448"], "re-running must not double-prefix")
+        rows = db.get_all_jobs(p)
+        _check(all(r["source"] == "vjb" for r in rows), "source should be set")
+        _check(all(r["reviewed"] == 1 for r in rows), "flags must survive")
+
+
+def test_same_native_id_from_two_sources_does_not_collide() -> None:
+    """VJB and Research Park post ids share a five-digit range, so the
+    namespace is what stops one overwriting the other."""
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid, title in (("vjb:48447", "VJB job"), ("rp:48447", "RP job")):
+            db.upsert_listing(
+                {"job_id": jid, "title": title, "company": "",
+                 "date_posted": "", "detail_url": "http://e.org"},
+                path=p,
+            )
+        rows = {r["job_id"]: r for r in db.get_all_jobs(p)}
+        _eq(len(rows), 2, "both rows should exist independently")
+        _eq(rows["vjb:48447"]["title"], "VJB job", "VJB row intact")
+        _eq(rows["rp:48447"]["title"], "RP job", "RP row intact")
+        _eq(rows["vjb:48447"]["source"], "vjb", "source derived from the id")
+        _eq(rows["rp:48447"]["source"], "rp", "source derived from the id")
+
+
+def test_auto_archive_is_scoped_to_one_source() -> None:
+    """The highest-risk regression: one source failing must not archive
+    another source's jobs."""
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("vjb:1", "rp:1"):
+            db.upsert_listing(
+                {"job_id": jid, "title": jid, "company": "",
+                 "date_posted": "", "detail_url": ""},
+                path=p,
+            )
+            db.set_reviewed(jid, True, p)
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET last_seen_at = '2020-01-01T00:00:00+00:00'")
+            conn.commit()
+
+        cutoff = "2026-09-28T00:00:00+00:00"
+        n = db.auto_archive_removed_jobs(cutoff, "vjb", p)
+        _eq(n, 1, "only the VJB row should archive")
+        rows = {r["job_id"]: r for r in db.get_all_jobs(p)}
+        _eq(rows["vjb:1"]["archived"], 1, "VJB row archived")
+        _eq(rows["rp:1"]["archived"], 0,
+            "Research Park row must be untouched by a VJB sweep")
+
+        _eq(db.auto_archive_removed_jobs(cutoff, "", p), 0,
+            "an empty source must archive nothing, not everything")
 
 
 def test_bulk_follow_up_actions() -> None:

@@ -9,7 +9,7 @@ from typing import Iterable
 
 from jobscanner import config
 from jobscanner.storage.meta import get_latest_scan_started_at
-from jobscanner.storage.schema import connect
+from jobscanner.storage.schema import LEGACY_SOURCE, connect
 from jobscanner.storage.sections import (
     SECTION_ALL,
     SECTION_FOLLOW_UP,
@@ -22,6 +22,11 @@ from jobscanner.timeutils import add_days_iso, now_iso
 # ---------------------------------------------------------------------------
 # Scan-time writes
 # ---------------------------------------------------------------------------
+
+
+def _source_of(job_id: str) -> str:
+    """Derive the source key from a namespaced job id ("rp:48827" -> "rp")."""
+    return job_id.split(":", 1)[0] if ":" in job_id else LEGACY_SOURCE
 
 
 def upsert_listing(job: dict, path: Path = config.DB_PATH) -> bool:
@@ -43,7 +48,7 @@ def upsert_listing(job: dict, path: Path = config.DB_PATH) -> bool:
             return False
         conn.execute(
             "INSERT INTO jobs (job_id, title, company, date_posted, detail_url, "
-            "first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "first_seen_at, last_seen_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job["job_id"],
                 job.get("title", ""),
@@ -52,6 +57,7 @@ def upsert_listing(job: dict, path: Path = config.DB_PATH) -> bool:
                 job.get("detail_url", ""),
                 now,
                 now,
+                job.get("source") or _source_of(job["job_id"]),
             ),
         )
         conn.commit()
@@ -321,25 +327,32 @@ def bulk_mark_further_follow_up(
 
 def auto_archive_removed_jobs(
     cutoff_iso: str,
+    source: str,
     path: Path = config.DB_PATH,
 ) -> int:
-    """Archive any *active* job that wasn't re-seen in the latest scan.
+    """Archive any *active* job of `source` that wasn't re-seen in the scan.
 
     Active = reviewed=1 OR to_apply=1 (Follow Up rows have reviewed=1 too,
     so they're included).  Cutoff is the ``latest_scan_started_at``
     timestamp; rows with ``last_seen_at < cutoff`` were not seen in that
-    scan and are therefore no longer listed on VJB.
+    scan and are therefore no longer listed.
+
+    `source` is required and scopes the update. It must never be optional:
+    an un-scoped sweep would archive every other source's jobs whenever one
+    source failed to fetch, which silently destroys real user state. The
+    caller is responsible for only invoking this for a source whose fetch
+    actually succeeded.
 
     No-op if cutoff_iso is empty (i.e. no scan has completed yet).
     """
-    if not cutoff_iso:
+    if not cutoff_iso or not source:
         return 0
     with connect(path) as conn:
         cur = conn.execute(
             "UPDATE jobs SET archived = 1, archived_at = ? "
             "WHERE archived = 0 AND (reviewed = 1 OR to_apply = 1) "
-            "AND last_seen_at < ?",
-            (now_iso(), cutoff_iso),
+            "AND last_seen_at < ? AND source = ?",
+            (now_iso(), cutoff_iso, source),
         )
         conn.commit()
         return cur.rowcount
