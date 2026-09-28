@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   applied_at       TEXT,
   follow_up_at     TEXT,
   archived         INTEGER NOT NULL DEFAULT 0,
-  archived_at      TEXT
+  archived_at      TEXT,
+  source           TEXT NOT NULL DEFAULT 'vjb'
 );
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -43,6 +44,9 @@ _MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("follow_up_at", "TEXT"),
     ("archived", "INTEGER NOT NULL DEFAULT 0"),
     ("archived_at", "TEXT"),
+    # Added when the scanner grew beyond the Virtual Job Board. Every row
+    # that predates multi-source support came from VJB, hence the default.
+    ("source", "TEXT NOT NULL DEFAULT 'vjb'"),
 )
 
 # Indexes worth having once the backing column exists.
@@ -51,7 +55,31 @@ _INDEXES: tuple[tuple[str, str], ...] = (
     ("idx_jobs_reviewed", "reviewed"),
     ("idx_jobs_to_apply", "to_apply"),
     ("idx_jobs_archived", "archived"),
+    ("idx_jobs_source", "source"),
 )
+
+
+#: Prefix applied to job ids that predate multi-source support.
+LEGACY_SOURCE = "vjb"
+
+
+def _namespace_legacy_ids(conn: sqlite3.Connection) -> int:
+    """Prefix pre-multi-source job ids with their source.
+
+    Job ids used to be the bare VJB post id ("48447"). Research Park post
+    ids live in the same five-digit range (48827 was live when this was
+    written), so without a namespace a Research Park posting could collide
+    with a real VJB job and silently overwrite it through upsert_listing.
+
+    Guarded on the separator so re-running is a no-op -- this must never
+    double-prefix an already-migrated row.
+    """
+    cur = conn.execute(
+        "UPDATE jobs SET job_id = ? || job_id, source = ? "
+        "WHERE instr(job_id, ':') = 0",
+        (f"{LEGACY_SOURCE}:", LEGACY_SOURCE),
+    )
+    return cur.rowcount
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -76,6 +104,8 @@ def init_db(path: Path = config.DB_PATH) -> None:
             if name not in cols:
                 conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
         cols = _table_columns(conn, "jobs")
+        if "source" in cols:
+            _namespace_legacy_ids(conn)
         for index_name, column in _INDEXES:
             if column not in cols:
                 continue
