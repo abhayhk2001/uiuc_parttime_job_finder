@@ -128,6 +128,9 @@ def main() -> int:
                    help="Force GUI launch even when stdout is not a TTY")
     p.add_argument("--gui-only", action="store_true",
                    help="Skip the scan and just open the GUI")
+    p.add_argument("--refetch-details", metavar="SOURCE",
+                   help="Re-fetch detail text for every stored row of SOURCE "
+                        "(e.g. vjb) and exit. Use after a parser change.")
     sub = p.add_subparsers(dest="command")
 
     imp = sub.add_parser("import", help="Import a jobs.db into AppData")
@@ -151,6 +154,10 @@ def _cmd_import(args) -> int:
 
 
 def _main_scan(args) -> int:
+    if getattr(args, "refetch_details", None):
+        return 0 if pipeline.refetch_details(
+            args.refetch_details, verbose=args.verbose) >= 0 else 1
+
     if args.gui_only:
         _open_gui()
         return 0

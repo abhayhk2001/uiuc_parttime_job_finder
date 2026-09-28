@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from jobscanner import alerts, config, matching
 from jobscanner import storage as db
-from jobscanner.sources import SOURCES, Source
+from jobscanner.sources import SOURCES, SOURCES_BY_KEY, Source
 from jobscanner.sources.base import ListingRow
 
 
@@ -137,6 +137,69 @@ def _scan_source(
         print(f"[scan] {source.label}: auto-archived {result.archived} "
               f"job(s) no longer listed.")
     return result, match_jobs
+
+
+def refetch_details(source_key: str, verbose: bool = False) -> int:
+    """Re-fetch detail text for every stored row of one source.
+
+    `get_jobs_missing_details()` only finds rows with *no* text, so a parser
+    improvement that changes what we extract from a page that we already
+    scraped would never reach the existing rows. This forces it.
+
+    Returns the number of rows updated.
+    """
+    source = SOURCES_BY_KEY.get(source_key)
+    if source is None:
+        print(f"[refetch] unknown source {source_key!r}; known: "
+              f"{', '.join(SOURCES_BY_KEY)}", file=sys.stderr)
+        return 0
+    if not source.supports_detail or source.fetch_detail is None:
+        print(f"[refetch] {source.label} has no detail pages to re-fetch.")
+        return 0
+
+    db.init_db()
+    backup = db.backup_db()
+    if backup is not None:
+        print(f"[refetch] Backed up DB to {backup.name}")
+        db.prune_old_backups()
+
+    keywords = matching.load_keywords()
+    rows = [r for r in db.get_all_jobs() if (r.get("source") or "") == source_key]
+    print(f"[refetch] {source.label}: {len(rows)} stored row(s).")
+
+    updated = 0
+    for stored in rows:
+        job_id = stored["job_id"]
+        native_id = job_id.split(":", 1)[1] if ":" in job_id else job_id
+        row = ListingRow(
+            native_id=native_id,
+            title=stored.get("title") or "",
+            detail_url=stored.get("detail_url") or "",
+            company=stored.get("company") or "",
+            date_posted=stored.get("date_posted") or "",
+        )
+        try:
+            detail = source.fetch_detail(row)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ! {job_id}: {exc}", file=sys.stderr)
+            continue
+
+        # fetch_detail may correct the title/company (VJB's listing only
+        # carries the department), so write the row back too.
+        db.upsert_listing(_row_to_record(row, source))
+        full = {**stored,
+                "job_description": detail.job_description,
+                "requirements": detail.requirements,
+                "skills": detail.skills}
+        matches = matching.find_matches(full, keywords)
+        db.update_details(job_id, detail.job_description, detail.requirements,
+                          detail.skills, matches)
+        updated += 1
+        if verbose:
+            print(f"   {job_id}: title={row.title!r} matches={matches}")
+
+    print(f"[refetch] Updated {updated} row(s).")
+    return updated
 
 
 def run(dry_run: bool = False, verbose: bool = False,

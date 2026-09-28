@@ -154,13 +154,61 @@ def test_clearinghouse_populated_listing() -> None:
 
 def test_clearinghouse_handles_a_posting_with_no_deadline() -> None:
     """One of the eleven postings observed had no deadline, so the field
-    must be optional rather than assumed."""
-    html = _fixture("ch_populated.html").replace(
-        '<div class="field-end-date-posting">', '<div class="absent">', 1)
+    must be optional rather than assumed.
+
+    A posting without a deadline has no <time> element at all -- so that is
+    what gets stripped here, rather than just renaming a wrapper class
+    (which the deliberately loose selector would still see through).
+    """
+    import re
+    html = re.sub(r"<time[^>]*>.*?</time>", "", _fixture("ch_populated.html"),
+                  count=1, flags=re.S)
     rows = clearinghouse.parse_listing(html)
     eq(len(rows), 5, "the row still parses without its deadline")
     check(any(r.extra["deadline"] == "" for r in rows),
           "a missing deadline yields an empty string, not a crash")
+    missing = next(r for r in rows if r.extra["deadline"] == "")
+    check("Application deadline" not in missing.teaser,
+          "and no empty deadline line is appended to the description")
+
+
+def test_clearinghouse_reads_the_live_markup_shape() -> None:
+    """Regression: the selectors were written against archived snapshots.
+    The live page nests the deadline one level differently and gives the
+    percent as text, so both silently came back empty."""
+    rows = clearinghouse.parse_listing(_fixture("ch_live_markup.html"))
+    eq(len(rows), 1, "one live posting")
+    row = rows[0]
+    eq(row.native_id, "94", "id from the board")
+    eq(row.extra["deadline"][:10], "2026-10-30",
+       "deadline found despite the different nesting")
+    eq(row.extra["percent"], "33% or 41%",
+       "percent read from text when there is no content attribute")
+
+
+def test_clearinghouse_folds_metadata_into_the_description() -> None:
+    """This source is listing-only and its teaser is often tiny, so the
+    deadline and appointment percent are appended to the text -- there are
+    no columns for them."""
+    rows = clearinghouse.parse_listing(_fixture("ch_live_markup.html"))
+    teaser = rows[0].teaser
+    check("Application deadline: 2026-10-30" in teaser,
+          f"deadline is visible in the description ({teaser!r})")
+    check("Appointment: 33% or 41%" in teaser,
+          "appointment percent is visible too")
+    check(teaser.startswith("Description and Qualifications"),
+          "the board's own text still comes first")
+
+
+def test_clearinghouse_percent_formatting() -> None:
+    eq(clearinghouse._format_percent("50"), "50%", "bare numbers gain a sign")
+    eq(clearinghouse._format_percent("33% or 41%"), "33% or 41%",
+       "text that already reads as percentages is left alone")
+    eq(clearinghouse._with_metadata("Body", "", ""), "Body",
+       "no metadata means no suffix")
+    eq(clearinghouse._with_metadata("", "2026-10-30T12:00:00Z", ""),
+       "Application deadline: 2026-10-30",
+       "an empty teaser yields just the metadata")
 
 
 def test_clearinghouse_empty_board_is_not_an_error() -> None:
@@ -172,6 +220,55 @@ def test_clearinghouse_skips_rows_without_an_id() -> None:
     html = _fixture("ch_populated.html").replace('class="field-id"', 'class="gone"')
     eq(clearinghouse.parse_listing(html), [],
        "without the board's id there is no stable key, so skip the row")
+
+
+# ---------------------------------------------------------------------------
+# VJB title / company
+# ---------------------------------------------------------------------------
+
+class _FakeSession:
+    """Stands in for VJBSession so the title logic is tested offline."""
+
+    def __init__(self, html: str) -> None:
+        self._html = html
+
+    def get_detail(self, _postid: str) -> str:
+        return self._html
+
+
+def _vjb_detail(fixture: str, listing_title: str) -> ListingRow:
+    from jobscanner.sources import vjb
+
+    row = ListingRow(native_id="1", title=listing_title,
+                     detail_url="x", company=listing_title)
+    original = vjb._get_session
+    vjb._get_session = lambda: _FakeSession(_fixture(fixture))
+    try:
+        vjb.fetch_detail(row)
+    finally:
+        vjb._get_session = original
+    return row
+
+
+def test_vjb_title_comes_from_the_detail_page() -> None:
+    """Regression: the VJB listing only carries the department, and the
+    parser assigned it to both title and company -- so every row showed a
+    department where its job title belongs, twice."""
+    row = _vjb_detail("vjb_detail_with_title.html",
+                      "Plant Biology Department, SIB")
+    eq(row.title, "Agricultural Assistant",
+       "title should come from the detail page's Job Title")
+    eq(row.company, "Plant Biology Department, SIB",
+       "company stays the hiring department")
+    check(row.title != row.company, "and the two no longer duplicate")
+
+
+def test_vjb_title_falls_back_when_the_detail_has_none() -> None:
+    """Many VJB postings leave Job Title blank; the listing text is then all
+    there is, so it must not be blanked out."""
+    row = _vjb_detail("vjb_detail_no_title.html", "Department of Physics")
+    eq(row.title, "Department of Physics",
+       "an empty Job Title must not wipe the listing title")
 
 
 # ---------------------------------------------------------------------------

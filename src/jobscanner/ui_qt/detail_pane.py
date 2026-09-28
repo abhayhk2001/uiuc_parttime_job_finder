@@ -47,15 +47,25 @@ _BODY_FIELDS: tuple[tuple[str, str], ...] = (
 def _build_body_html(job: dict, palette) -> str:
     """Build the HTML body for ``QTextBrowser``.
 
-    Each section gets its own ``<h3>`` heading and a paragraph (or "(empty)"
-    placeholder). Inline styling is used because QTextBrowser does not
-    inherit QSS from the surrounding window reliably.
+    Each populated section gets its own ``<h3>`` heading and a paragraph.
+    Sections with no text are omitted rather than shown as "(empty)": only
+    the Virtual Job Board splits its text into Requirements and Skills, so
+    every Research Park, Clearinghouse and Library job would otherwise
+    carry two empty headings. Description is always rendered, so a job with
+    no text at all still shows why the pane looks bare.
+
+    Inline styling is used because QTextBrowser does not inherit QSS from
+    the surrounding window reliably.
     """
     parts: list[str] = []
     body_color = palette["text"]
     muted = palette["muted"]
     for heading, field in _BODY_FIELDS:
-        value = (job.get(field) or "").strip() or "(empty)"
+        value = (job.get(field) or "").strip()
+        if not value:
+            if field != "job_description":
+                continue
+            value = "(empty)"
         escaped = html.escape(value).replace("\n", "<br>")
         parts.append(
             f'<h3 style="color:{muted}; margin-top:14px; margin-bottom:4px;">'

@@ -180,6 +180,34 @@ def test_context_menu_signal_carries_the_row_and_position() -> None:
            "the signal carries the right-clicked row's job_id")
 
 
+def test_detail_pane_omits_sections_with_no_text() -> None:
+    """Only the Virtual Job Board splits its text into Requirements and
+    Skills. Every Research Park, Clearinghouse and Library job would
+    otherwise carry two "(empty)" headings."""
+    from jobscanner.ui_qt.detail_pane import _build_body_html
+    from jobscanner.ui_qt import palette
+
+    p = palette.DARK
+    listing_only = _build_body_html(
+        {"job_description": "Full description text",
+         "requirements": "", "skills": ""}, p)
+    check("Description" in listing_only, "Description is rendered")
+    check("Requirements" not in listing_only,
+          "an empty Requirements section is omitted entirely")
+    check("Skills" not in listing_only, "so is an empty Skills section")
+    check("(empty)" not in listing_only, "and no placeholder is shown")
+
+    full = _build_body_html(
+        {"job_description": "d", "requirements": "r", "skills": "s"}, p)
+    for heading in ("Description", "Requirements", "Skills"):
+        check(heading in full, f"{heading} still renders when populated")
+
+    bare = _build_body_html(
+        {"job_description": "", "requirements": "", "skills": ""}, p)
+    check("Description" in bare and "(empty)" in bare,
+          "a job with no text at all still explains the empty pane")
+
+
 def test_row_activation_opens_the_url() -> None:
     """Double-clicking (or pressing Return on) a row calls
     _open_selected_in_browser with the selected job."""

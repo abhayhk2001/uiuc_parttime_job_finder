@@ -28,6 +28,63 @@ LISTING_URL = (
 BASE_URL = "https://grad.illinois.edu"
 
 
+def _deadline(panel) -> str:
+    """The application deadline as an ISO string, or "".
+
+    Deliberately matches any nested <time> under .field-deadline rather than
+    one exact wrapper class: the live markup nests it as
+    .field-deadline > .field-deadline > time while archived pages used
+    .field-deadline > .field-end-date-posting > time, and pinning the inner
+    class silently lost the date on current postings. Also note the deadline
+    is genuinely optional -- one of eleven observed postings had none.
+    """
+    el = panel.select_one(".field-deadline time[datetime]")
+    if el is not None:
+        return el.get("datetime") or ""
+    el = panel.select_one(".field-end-date-posting time[datetime]")
+    return (el.get("datetime") or "") if el is not None else ""
+
+
+def _percent(panel) -> str:
+    """The appointment percent, e.g. "50" or "33% or 41%".
+
+    Some postings carry a machine-readable content attribute, others only
+    text -- and the text is not always a single number, so this stays a
+    string rather than being coerced to an int.
+    """
+    el = panel.select_one(".field-percent[content]")
+    if el is not None and el.get("content"):
+        return el.get("content")
+    el = panel.select_one(".field-percent")
+    return clean(el.get_text(" ", strip=True)) if el is not None else ""
+
+
+def _format_percent(percent: str) -> str:
+    """Append a % sign only when the value is a bare number."""
+    return f"{percent}%" if percent.isdigit() else percent
+
+
+def _with_metadata(teaser: str, deadline: str, percent: str) -> str:
+    """Fold the deadline and appointment percent into the description text.
+
+    This source is listing-only -- its detail pages sit behind a campus
+    login -- and the teaser is often very short (one live posting's is just
+    the heading "Description and Qualifications"). The deadline and percent
+    are the most useful facts the listing carries, and there are no columns
+    for them, so they go into the description where the detail pane shows
+    them and search can reach them.
+    """
+    bits = []
+    if deadline:
+        bits.append(f"Application deadline: {deadline[:10]}")
+    if percent:
+        bits.append(f"Appointment: {_format_percent(percent)}")
+    if not bits:
+        return teaser
+    suffix = "  \u00b7  ".join(bits)
+    return f"{teaser}\n\n{suffix}" if teaser else suffix
+
+
 def parse_listing(html: str) -> list[ListingRow]:
     """Parse the clearinghouse listing.
 
@@ -55,21 +112,17 @@ def parse_listing(html: str) -> list[ListingRow]:
             href = BASE_URL + href
 
         desc = panel.select_one(".field-description")
-        deadline_el = panel.select_one(".field-end-date-posting time")
-        percent_el = panel.select_one(".field-percent[content]")
+        deadline = _deadline(panel)
+        percent = _percent(panel)
+        teaser = clean(desc.get_text(" ", strip=True)) if desc else ""
 
         rows.append(ListingRow(
             native_id=native_id,
             title=title,
             detail_url=href,
             company="Graduate College",
-            teaser=clean(desc.get_text(" ", strip=True)) if desc else "",
-            extra={
-                # Optional: one of the eleven observed postings had no
-                # deadline, so never assume this is present.
-                "deadline": (deadline_el.get("datetime") if deadline_el else ""),
-                "percent": (percent_el.get("content") if percent_el else ""),
-            },
+            teaser=_with_metadata(teaser, deadline, percent),
+            extra={"deadline": deadline, "percent": percent},
         ))
     return rows
 
