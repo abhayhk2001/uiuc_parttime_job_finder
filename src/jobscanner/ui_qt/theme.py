@@ -20,6 +20,7 @@ from PySide6.QtGui import QGuiApplication, QPalette
 
 from jobscanner.ui_qt import palette as pal_mod
 from jobscanner.ui_qt.palette import Palette
+from jobscanner.ui_qt.settings import app_settings
 
 
 _QSS_TEMPLATE = """
@@ -136,9 +137,7 @@ def _detect_palette() -> Palette:
     """
     # The override key is read here only on first apply; the live listener
     # added in `apply_app` keeps it in sync afterward.
-    from PySide6.QtCore import QSettings
-
-    settings = QSettings()
+    settings = app_settings()
     override = settings.value("appearance/override", "auto", type=str)
     if override == "light":
         return pal_mod.LIGHT
@@ -181,9 +180,7 @@ def _on_color_scheme_changed(_scheme) -> None:
     app = QGuiApplication.instance()
     if app is None:
         return
-    from PySide6.QtCore import QSettings
-
-    override = QSettings().value("appearance/override", "auto", type=str)
+    override = app_settings().value("appearance/override", "auto", type=str)
     if override != "auto":
         return  # user picked a fixed mode; OS changes are ignored
     p = pal_mod.DARK if _scheme == Qt.ColorScheme.Dark else pal_mod.LIGHT

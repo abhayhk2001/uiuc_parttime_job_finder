@@ -52,6 +52,16 @@ pip install -e .
 jobscanner --no-gui
 ```
 
+**If you move or rename the project directory**, re-run `pip install -e .`. A
+virtualenv records absolute paths, so after a move the editable install still
+points at the old `src/` (bare `import jobscanner` fails) and the console
+scripts in `.venv/bin` carry dead shebangs (`bad interpreter`). `python main.py`
+and `.venv/bin/python -m pytest` keep working either way, since both put `src/`
+on the path themselves. If `pytest` or `pip` still misbehave afterwards,
+`pip install --force-reinstall --no-deps pytest pip` regenerates their
+launchers — needed in particular when the new path contains a space, where pip
+switches to a `/bin/sh` wrapper.
+
 ## Run
 
 ```bash
@@ -111,11 +121,11 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
     - **Old** — unreviewed jobs that pre-date the current scan (i.e. any non-New unreviewed row).
     - **Reviewed** — jobs you've looked at but haven't applied to.
   - **TO APPLY** — jobs you've flagged as "I want to apply to this one". Reviewed jobs cannot be added.
-  - **FOLLOW UP** — jobs you've marked Applied (with `applied_at` and `follow_up_at` recorded). Sorted by follow-up date ascending so overdue items appear first.
+  - **APPLIED** — jobs you've marked Applied (with `applied_at` and `follow_up_at` recorded). Sorted by follow-up date ascending so overdue items appear first.
   - **ARCHIVED** — jobs removed from the VJB listing since the last scan, or jobs you archived manually. Recoverable via Unarchive.
-  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Follow Up Further", "Archive all Follow Up". Each button is enabled only when its section has rows. The four destructive ones (revisit all, apply all, unmark all, archive all) ask for confirmation first; every one reports its result as a status-bar toast that fades after a few seconds rather than a modal dialog.
+  - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Applied Further", "Archive all Applied". Each button is enabled only when its section has rows. The four destructive ones (revisit all, apply all, unmark all, archive all) ask for confirmation first; every one reports its result as a status-bar toast that fades after a few seconds rather than a modal dialog.
   - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`.
-- **Numeric section shortcuts** — `Cmd/Ctrl-1` through `Cmd/Ctrl-7` jump to the corresponding section (All, New, Old, Reviewed, To Apply, Follow Up, Archived).
+- **Numeric section shortcuts** — `Cmd/Ctrl-1` through `Cmd/Ctrl-7` jump to the corresponding section (All, New, Old, Reviewed, To Apply, Applied, Archived).
 - **Search row** — a filter box above the table that matches case-insensitively across title, company, description, requirements, skills and matched keywords. The "Matches only" checkbox restricts the view to rows that matched at least one keyword. Both filters compose with the section sidebar.
 - **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). Sortable: click any column header. Right-aligned numeric columns. Right-click a row for the context menu (Open in Browser, Copy Job ID, Copy URL, the two state-machine actions). Double-click a row, or press Return, to open the posting in the default browser.
 - **Grouped by source.** Rows sit under a collapsible heading per board —
@@ -141,7 +151,8 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
   3. **Company**, plus applied / follow-up / archived dates where they apply.
   4. **Primary action button** — context-aware, checked in this order:
      - Archived job → **"↩ Unarchive"**.
-     - Applied job (Follow Up) → **"↻ Mark Further Follow Up"**.
+     - Applied job → **"↻ Mark Further Follow Up"** (the button keeps this
+       name; it resets `follow_up_at`).
      - To Apply job → **"✓ Mark Applied"** — atomic transition: clears `to_apply`, sets `reviewed=1`, and records `applied_at` / `follow_up_at`.
      - Reviewed job → **"↻ Revisit"** (clears reviewed, row returns to New/Old).
      - Otherwise → **"✓ Mark Reviewed"** (sets reviewed=1).
@@ -177,10 +188,10 @@ The First/Last seen timestamps are intentionally hidden — they're internal boo
 | `Cmd-1` … `Cmd-7` | Jump to a section, in sidebar order |
 | `Return` / double-click | Open the selected job in the browser |
 
-### To Apply / Follow Up / Archive state machine
+### To Apply / Applied / Archive state machine
 
 ```
-   New ───────────► To Apply ─────────► Follow Up ─────────► Archived
+   New ───────────► To Apply ─────────► Applied  ─────────► Archived
    Old ────────► (Add to To Apply)  (Mark Applied)       (Archive)
                   ↓                      ↓                  ↑
                   ↓  (Mark Applied)      ↓ (Mark Further     ↑ (Unarchive)
@@ -190,23 +201,23 @@ The First/Last seen timestamps are intentionally hidden — they're internal boo
                   ↓                      ↓                  ↑  gone on next
                   ↓                      ↓                  ↑  scan)
    Reviewed ──── (Revisit) ────►  New / Old   (to_apply stays 0)
-   Follow Up ── (Mark Further Follow Up) ──► Follow Up   (resets follow_up_at)
-   Follow Up ── (Archive)        ──► Archived
-   Archived ──── (Unarchive)     ──► Follow Up or Reviewed (whichever applied_at dictates)
+   Applied  ── (Mark Further Follow Up) ──► Applied   (resets follow_up_at)
+   Applied  ── (Archive)        ──► Archived
+   Archived ──── (Unarchive)     ──► Applied or Reviewed (whichever applied_at dictates)
    Any active section ── (next scan, last_seen_at < cutoff) ──► Archived (auto)
 ```
 
 Single-row transitions are silent — the DB updates and the row re-buckets. Bulk actions report to the status bar, and the destructive ones confirm first.
 
-### Follow Up workflow
+### Applied workflow
 
 When you click **Mark Applied** (in the To Apply section), the app records:
 - `applied_at = now`
 - `follow_up_at = applied_at + FOLLOW_UP_WINDOW_DAYS` (default 7 days, configurable in `config.py`)
 
-The job moves from **To Apply** to **Follow Up**.
+The job moves from **To Apply** to **Applied**.
 
-In the **Follow Up** section, the detail pane shows:
+In the **Applied** section, the detail pane shows:
 - "Applied: 2026-09-23"
 - "Follow up: 2026-09-30 (in 7 days)"
 
@@ -214,13 +225,13 @@ Click **✎ Edit follow-up date** to open the date editor. Preset buttons (+1d /
 
 The **Mark Further Follow Up** primary button resets `follow_up_at = now + 7d` — for the common "I followed up today, remind me in a week" flow.
 
-The bulk **"Mark all To Apply Applied"** action runs exactly the same transition as the single-row button, timestamps included, so bulk-applied jobs land in Follow Up rather than stopping at Reviewed.
+The bulk **"Mark all To Apply Applied"** action runs exactly the same transition as the single-row button, timestamps included, so bulk-applied jobs land in Applied rather than stopping at Reviewed.
 
 The **Archive** secondary button moves the job to **Archived**.
 
 ### Auto-archive
 
-After every successful `python main.py` scan, the app runs `db.auto_archive_removed_jobs(cutoff)` which archives any *active* job (reviewed OR to-apply OR in Follow Up) whose `last_seen_at` is older than the current scan cutoff — i.e. it disappeared from the VJB listing. Active jobs you can no longer apply to or follow up on get archived automatically. Use **Unarchive** to bring one back.
+After every successful `python main.py` scan, the app runs `db.auto_archive_removed_jobs(cutoff)` which archives any *active* job (reviewed OR to-apply OR in Applied) whose `last_seen_at` is older than the current scan cutoff — i.e. it disappeared from the VJB listing. Active jobs you can no longer apply to or follow up on get archived automatically. Use **Unarchive** to bring one back.
 - **Free-text search** filters the currently selected section across title, company, description, requirements, skills, and matched keywords.
 - **"Matches only" toggle** hides non-matching rows inside the current section.
 - **"Run Scan"** runs the scanner in a background thread; live logs stream into a collapsible log console at the bottom of the window. Output produced while the console is collapsed is buffered and replayed when you open it. The button is disabled while a scan is in flight. A successful scan advances the "New" cutoff — see the schema section.
@@ -385,7 +396,7 @@ python tests/smoke_table.py
 | `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune, id namespacing and per-source archiving |
 | `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards, both Clearinghouse markup shapes, and the VJB title promotion + its fallback |
 | `test_gui_grouping.py` | The table's per-source sections: registry ordering, headings with counts, sorting within sections, filtering dropping empty ones, headings not selectable as jobs, collapse surviving a relaunch |
-| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Follow Up → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings |
+| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Applied → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings |
 | `test_gui_bulk_actions.py` | Every registered bulk action, both confirmation paths, the status-bar toast, the All section |
 | `test_gui_interactions.py` | Chip reuse across same-keyword refreshes, empty-state explanation, action shortcuts, context-menu signal, dock toggle, clipboard copy, the open-in-browser action |
 | `test_gui_layout.py` | Window defaults, central splitter proportions, sidebar + log dock placement, follow-up dialog preset grid, layout restoration across launches |

@@ -330,18 +330,25 @@ def auto_archive_removed_jobs(
     source: str,
     path: Path = config.DB_PATH,
 ) -> int:
-    """Archive any *active* job of `source` that wasn't re-seen in the scan.
+    """Archive every job of `source` that wasn't re-seen in the scan.
 
-    Active = reviewed=1 OR to_apply=1 (Follow Up rows have reviewed=1 too,
-    so they're included).  Cutoff is the ``latest_scan_started_at``
-    timestamp; rows with ``last_seen_at < cutoff`` were not seen in that
-    scan and are therefore no longer listed.
+    Cutoff is the ``latest_scan_started_at`` timestamp; rows with
+    ``last_seen_at < cutoff`` were not listed in that scan and so are no
+    longer open.
+
+    This used to archive only *active* rows (reviewed=1 OR to_apply=1),
+    which meant a posting the user had never looked at stayed in Old forever
+    once it left the board -- twelve of fifteen Research Park rows were in
+    that state when this changed. A job that is gone is gone regardless of
+    whether it was reviewed, so the condition is deliberately absent.
 
     `source` is required and scopes the update. It must never be optional:
     an un-scoped sweep would archive every other source's jobs whenever one
     source failed to fetch, which silently destroys real user state. The
-    caller is responsible for only invoking this for a source whose fetch
-    actually succeeded.
+    caller is also responsible for only invoking this for a source whose
+    fetch succeeded *and returned rows* -- see pipeline._scan_source, which
+    skips archiving on an empty listing so that a parser returning [] can't
+    wipe a whole source.
 
     No-op if cutoff_iso is empty (i.e. no scan has completed yet).
     """
@@ -350,8 +357,7 @@ def auto_archive_removed_jobs(
     with connect(path) as conn:
         cur = conn.execute(
             "UPDATE jobs SET archived = 1, archived_at = ? "
-            "WHERE archived = 0 AND (reviewed = 1 OR to_apply = 1) "
-            "AND last_seen_at < ? AND source = ?",
+            "WHERE archived = 0 AND last_seen_at < ? AND source = ?",
             (now_iso(), cutoff_iso, source),
         )
         conn.commit()

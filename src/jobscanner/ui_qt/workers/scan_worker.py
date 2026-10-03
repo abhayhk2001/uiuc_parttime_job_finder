@@ -13,7 +13,8 @@ wires the QThread in.
 from __future__ import annotations
 
 import sys
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QObject, Signal
 
@@ -71,10 +72,14 @@ class ScanWorker(QObject):
     finished = Signal(bool)
 
     def __init__(self, dry_run: bool = False, fetch_missing: bool = True,
+                 db_path: Optional[Path] = None,
                  parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._dry_run = dry_run
         self._fetch_missing = fetch_missing
+        # The window is constructed with its own db_path; without passing it
+        # through, a scan would write to whichever DB config points at.
+        self._db_path = db_path
 
     def run(self) -> None:
         """Run the scan. Always emits ``finished`` exactly once."""
@@ -87,6 +92,7 @@ class ScanWorker(QObject):
                 dry_run=self._dry_run,
                 verbose=False,
                 fetch_missing=self._fetch_missing,
+                path=self._db_path,
             )
             success = (rc == 0)
         except Exception as exc:  # noqa: BLE001

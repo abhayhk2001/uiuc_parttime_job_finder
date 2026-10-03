@@ -58,8 +58,10 @@ from jobscanner.ui_qt.sidebar import SidebarDock, build_sections_list
 from jobscanner.ui_qt.workers.scan_worker import ScanWorker
 
 
-APP_ORG = "UIUC"
-APP_NAME = "PartTimeJobScanner"
+from jobscanner.ui_qt.settings import APP as APP_NAME, ORG as APP_ORG
+
+
+from jobscanner.ui_qt.settings import app_settings  # noqa: E402
 APP_TITLE = "UIUC Part-Time Job Scanner"
 
 DEFAULT_GEOMETRY = (1380, 860)
@@ -169,7 +171,7 @@ class JobScannerApp(QMainWindow):
             self._on_color_scheme_changed)
 
         # Restore window geometry, dock state, and splitter sizes.
-        settings = QSettings()
+        settings = app_settings()
         geometry = settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -427,7 +429,8 @@ class JobScannerApp(QMainWindow):
         self.log_dock.clear()
 
         self._scan_thread = QThread(self)
-        self._scan_worker = ScanWorker(dry_run=False, fetch_missing=True)
+        self._scan_worker = ScanWorker(dry_run=False, fetch_missing=True,
+                                       db_path=self.db_path)
         self._scan_worker.moveToThread(self._scan_thread)
         self._scan_thread.started.connect(self._scan_worker.run)
         self._scan_worker.textWritten.connect(self.log_dock.append)
@@ -476,15 +479,10 @@ class JobScannerApp(QMainWindow):
         from PySide6 import __version__ as pyside_version
         return f"{pyside_version} / Qt {QT_VERSION}" if (QT_VERSION := _qt_runtime_version()) else pyside_version
 
-    def _not_implemented(self, name: str):
-        def _handler() -> None:
-            self.status_bar.showMessage(f"{name}: not wired up yet", 4000)
-        return _handler
-
     # -- close ---------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        settings = QSettings()
+        settings = app_settings()
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/state", self.saveState())
         settings.setValue("window/splitter_sizes", self.splitter.sizes())
