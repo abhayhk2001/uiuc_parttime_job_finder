@@ -146,6 +146,19 @@ def seed_jobs(db, path: Path, count: int = 6, match_every: int = 2,
 
 
 @contextmanager
+def qt_only() -> Iterator[None]:
+    """Guarantee a QApplication, without building the whole main window.
+
+    For tests that exercise one widget (the jobs table, say) rather than the
+    application. QApplication must exist exactly once per process, so reuse
+    whatever pytest already created.
+    """
+    if QApplication.instance() is None:
+        QApplication(sys.argv[:1])
+    yield
+
+
+@contextmanager
 def qt_app(count: int = 6, match_every: int = 2,
            size: tuple[int, int] = (1380, 860),
            **seed_kwargs) -> Iterator[tuple]:

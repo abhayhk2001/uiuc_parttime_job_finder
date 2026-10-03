@@ -42,6 +42,23 @@ def fetch_listing() -> list[ListingRow]:
 def fetch_detail(row: ListingRow) -> Detail:
     html = _get_session().get_detail(row.native_id)
     parsed = scraper.parse_detail(html, row.native_id)
+
+    # The VJB *listing* only carries the hiring department, and
+    # scraper/parsing.py puts it in both `title` and `company` -- so every
+    # row showed a department where its job title belongs ("Plant Biology
+    # Department, SIB" instead of "Agricultural Assistant") and duplicated
+    # it across two columns. The real title is only on the detail page.
+    # Some postings leave it blank, so keep the listing text as a fallback.
+    job_title = (parsed.get("job_title") or "").strip()
+    if job_title:
+        row.title = job_title
+
+    # The detail page's company field is the department, which is what we
+    # want in the Company column; prefer it when present.
+    company = (parsed.get("company") or "").strip()
+    if company:
+        row.company = company
+
     return Detail(
         job_description=parsed.get("job_description", ""),
         requirements=parsed.get("requirements", ""),

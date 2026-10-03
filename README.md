@@ -97,7 +97,7 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
 
 | Sections sidebar (`QDockWidget`)  | Jobs table (`QTableView`)         | Detail pane                  |
 | --------------------------------- | --------------------------------- | ---------------------------- |
-| Sections, bulk actions, keywords  | Sortable, filterable rows          | Job details, action buttons  |
+| Sections, bulk actions, keywords  | Rows grouped by source, sortable, filterable | Job details, action buttons  |
 
 - **Native menu bar** — `File`, `Edit`, `View`, `Job`, `Scan`, `Help`. View → Toggle Sidebar (`Cmd/Ctrl-B`) and Toggle Log Dock (`Cmd/Ctrl-L`) hide/show their respective panels. View → Appearance (`Cmd-,` if you bind it) opens a Light/Dark/Auto dialog.
 - **Dockable sidebar** — the sections list, bulk actions and keywords panel live in a single `QDockWidget` on the left. Drag the dock's title bar to float it, drag it to another edge to re-dock, click the close icon to hide it. The toolbar keeps working whether the sidebar is visible or not.
@@ -118,6 +118,18 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
 - **Numeric section shortcuts** — `Cmd/Ctrl-1` through `Cmd/Ctrl-7` jump to the corresponding section (All, New, Old, Reviewed, To Apply, Follow Up, Archived).
 - **Search row** — a filter box above the table that matches case-insensitively across title, company, description, requirements, skills and matched keywords. The "Matches only" checkbox restricts the view to rows that matched at least one keyword. Both filters compose with the section sidebar.
 - **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). Sortable: click any column header. Right-aligned numeric columns. Right-click a row for the context menu (Open in Browser, Copy Job ID, Copy URL, the two state-machine actions). Double-click a row, or press Return, to open the posting in the default browser.
+- **Grouped by source.** Rows sit under a collapsible heading per board —
+  `Research Park  (15)` — so the table shows which listings came from where
+  without a column repeating it on every row. Sections appear in the order the
+  sources are registered (VJB, Research Park, Clearinghouse, Library), and only
+  for boards that actually have rows.
+  - Sorting a column reorders jobs **within** each section; the sections
+    themselves never move.
+  - Filtering and search hide a section entirely once none of its jobs match.
+  - Collapse a section and it stays collapsed across launches. Selecting a job
+    inside a collapsed section expands it.
+  - Job IDs display without their `<source>:` prefix, since the heading already
+    says which board it is.
 - **Highlight rules** in the table (driven by the model's `ForegroundRole`):
   - Bright green text = matched one or more keywords and is not yet reviewed.
   - Dim green text = matched keywords but already reviewed.
@@ -356,7 +368,7 @@ A scan writes to the DB in several places (`init_db` migrations, `upsert_listing
 ## Tests
 
 ```bash
-pytest tests/                               # everything (78 tests)
+pytest tests/                               # everything (98 tests)
 pytest tests/test_db_isolated.py           # storage layer only
 python tests/test_gui_workflow.py          # one module, as a plain script
 python tests/test_gui_bulk_actions.py
@@ -366,12 +378,13 @@ python tests/smoke_skeleton.py             # standalone smoke (no DB needed)
 python tests/smoke_table.py
 ```
 
-78 tests in six layers:
+98 tests in seven layers:
 
 | Module | Covers |
 | ------ | ------ |
 | `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune, id namespacing and per-source archiving |
-| `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards and the optional Clearinghouse deadline |
+| `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards, both Clearinghouse markup shapes, and the VJB title promotion + its fallback |
+| `test_gui_grouping.py` | The table's per-source sections: registry ordering, headings with counts, sorting within sections, filtering dropping empty ones, headings not selectable as jobs, collapse surviving a relaunch |
 | `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Follow Up → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings |
 | `test_gui_bulk_actions.py` | Every registered bulk action, both confirmation paths, the status-bar toast, the All section |
 | `test_gui_interactions.py` | Chip reuse across same-keyword refreshes, empty-state explanation, action shortcuts, context-menu signal, dock toggle, clipboard copy, the open-in-browser action |
