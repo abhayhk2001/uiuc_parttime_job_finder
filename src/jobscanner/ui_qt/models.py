@@ -277,10 +277,29 @@ class JobsTreeModel(QAbstractItemModel):
         return None
 
     def refresh_palette(self) -> None:
+        """Re-read palette colours and invalidate every painted cell.
+
+        The job rows are *children* of the section rows, so invalidating the
+        top level alone leaves their match/reviewed colours stale after a
+        theme switch -- which is exactly what the first version of this did.
+        Each group's children need their own dataChanged.
+        """
         self._palette = theme.current_palette()
-        if self._groups:
+        if not self._groups:
+            return
+        last_col = len(COLUMNS) - 1
+        # The section rows themselves.
+        self.dataChanged.emit(
+            self.index(0, 0), self.index(len(self._groups) - 1, last_col),
+            [Qt.ForegroundRole])
+        # And the jobs under each one.
+        for position, group in enumerate(self._groups):
+            if not group.rows:
+                continue
+            parent = self.index(position, 0)
             self.dataChanged.emit(
-                self.index(0, 0), self.index(len(self._groups) - 1, 0),
+                self.index(0, 0, parent),
+                self.index(len(group.rows) - 1, last_col, parent),
                 [Qt.ForegroundRole])
 
     # -- index plumbing ---------------------------------------------------

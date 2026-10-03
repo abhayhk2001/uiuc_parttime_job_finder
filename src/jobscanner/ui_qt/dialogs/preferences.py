@@ -6,6 +6,8 @@ Lets the user override the OS theme detection: Light / Dark / Auto.
 from __future__ import annotations
 
 from PySide6.QtCore import QSettings
+
+from jobscanner.ui_qt.settings import app_settings
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -42,7 +44,7 @@ class PreferencesDialog(QDialog):
         self._group.addButton(self._light)
         self._group.addButton(self._dark)
 
-        current = QSettings().value("appearance/override", "auto", type=str)
+        current = app_settings().value("appearance/override", "auto", type=str)
         if current == "light":
             self._light.setChecked(True)
         elif current == "dark":
@@ -68,7 +70,7 @@ class PreferencesDialog(QDialog):
             override = "dark"
         else:
             override = "auto"
-        QSettings().setValue("appearance/override", override)
+        app_settings().setValue("appearance/override", override)
         # Reapply immediately so the user sees the change before the dialog
         # closes.
         app = QApplication.instance()

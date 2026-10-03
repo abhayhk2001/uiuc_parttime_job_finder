@@ -394,7 +394,7 @@ def test_section_predicates_isolate_follow_up_and_archived() -> None:
         _check(ar_rows[0]["job_id"] == "C", "expected C to be in Archived")
 
 
-def test_auto_archive_removed_jobs_archives_only_active_rows() -> None:
+def test_auto_archive_removed_jobs_archives_everything_delisted() -> None:
     with _TempDB() as p:
         db.init_db(p)
         for jid in ("A", "B", "C", "D"):
@@ -409,25 +409,51 @@ def test_auto_archive_removed_jobs_archives_only_active_rows() -> None:
                 "UPDATE jobs SET last_seen_at = '2020-01-01T00:00:00+00:00'"
             )
             conn.commit()
-        # Mark some as active.
+        # Mark some as active; D stays untouched.
         db.set_reviewed("A", True, p)
         db.set_to_apply("B", True, p)
-        db.mark_applied("C", p)  # also reviewed=1, applied, in Follow Up
-        # D stays unreviewed (in New/Old).
+        db.mark_applied("C", p)  # also reviewed=1, applied
+        # D is unreviewed -- it used to be exempt, which left delisted
+        # postings nobody had looked at sitting in Old forever.
 
         cutoff = "2026-09-23T00:00:00+00:00"  # newer than last_seen_at
         archived_n = db.auto_archive_removed_jobs(cutoff, "vjb", p)
-        _eq(archived_n, 3, "A, B, C should auto-archive; D stays unreviewed")
+        _eq(archived_n, 4, "every delisted row archives, reviewed or not")
 
         rows = {r["job_id"]: r for r in db.get_all_jobs(p)}
-        _check(rows["A"]["archived"] == 1, "A should be archived")
-        _check(rows["B"]["archived"] == 1, "B should be archived")
-        _check(rows["C"]["archived"] == 1, "C should be archived")
-        _check(rows["D"]["archived"] == 0, "D should NOT be archived")
+        for jid in ("A", "B", "C", "D"):
+            _check(rows[jid]["archived"] == 1,
+                   f"{jid} should be archived once it leaves the board")
+        _check(all(rows[j]["archived_at"] for j in ("A", "B", "C", "D")),
+               "archived_at is stamped")
 
         # No-op when cutoff is empty.
         _eq(db.auto_archive_removed_jobs("", "vjb", p), 0,
             "empty cutoff should be a no-op")
+
+
+def test_auto_archive_spares_rows_seen_in_this_scan() -> None:
+    """Only rows older than the cutoff are archived -- anything the scan
+    just re-listed keeps its place."""
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("fresh", "stale"):
+            db.upsert_listing(
+                {"job_id": jid, "title": jid, "company": "",
+                 "date_posted": "", "detail_url": ""},
+                path=p,
+            )
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET last_seen_at = '2020-01-01T00:00:00+00:00' "
+                "WHERE job_id = 'stale'")
+            conn.commit()
+
+        n = db.auto_archive_removed_jobs("2026-01-01T00:00:00+00:00", "vjb", p)
+        _eq(n, 1, "only the stale row archives")
+        rows = {r["job_id"]: r for r in db.get_all_jobs(p)}
+        _eq(rows["stale"]["archived"], 1, "stale row archived")
+        _eq(rows["fresh"]["archived"], 0, "re-listed row untouched")
 
 
 def test_legacy_ids_are_namespaced_once() -> None:

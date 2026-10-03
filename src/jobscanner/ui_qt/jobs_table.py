@@ -37,11 +37,9 @@ from PySide6.QtWidgets import (
 
 from jobscanner.ui_qt.models import COLUMNS, JobRoles, JobsTreeModel
 from jobscanner.ui_qt.proxies import JobsFilterProxy
+from jobscanner.ui_qt.settings import app_settings
 
-#: Where collapsed sections are remembered between launches. Same org/app
-#: names the rest of the window's layout uses.
-_SETTINGS_ORG = "UIUC"
-_SETTINGS_APP = "PartTimeJobScanner"
+#: Where collapsed sections are remembered between launches.
 _COLLAPSED_KEY = "table/collapsed_sources"
 
 
@@ -158,7 +156,7 @@ class JobsTableView(QTreeView):
     # -- collapse state ---------------------------------------------------
 
     def _settings(self) -> QSettings:
-        return QSettings(_SETTINGS_ORG, _SETTINGS_APP)
+        return app_settings()
 
     def collapsed_sources(self) -> set[str]:
         raw = self._settings().value(_COLLAPSED_KEY, "") or ""
