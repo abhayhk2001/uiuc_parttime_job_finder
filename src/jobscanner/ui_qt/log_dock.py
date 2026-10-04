@@ -51,8 +51,12 @@ class LogDock(QDockWidget):
         self.setWidget(self._text)
 
     def append(self, text: str) -> None:
-        """Append ``text`` and scroll to the end."""
-        if not text:
+        """Append one line (or a block of lines) and scroll to the end.
+
+        An empty string is a deliberate blank line -- e.g. ``print()`` --
+        so it is kept.
+        """
+        if text is None:
             return
         self._text.appendPlainText(text.rstrip("\n"))
         cursor = self._text.textCursor()

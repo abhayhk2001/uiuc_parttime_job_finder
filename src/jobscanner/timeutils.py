@@ -7,7 +7,7 @@ that format is produced or interpreted.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
 
@@ -42,15 +42,49 @@ def add_days_iso(iso_ts: str, days: int) -> str:
     return (dt + timedelta(days=days)).isoformat(timespec="seconds")
 
 
+def to_local_date(value: str) -> Optional[date]:
+    """The calendar date `value` falls on for the user, or None.
+
+    Timestamps are stored in UTC, but a person thinks in local days: 8pm
+    in Illinois is already tomorrow in UTC. A bare ``YYYY-MM-DD`` (what
+    older builds stored from the date picker) already is a local date and
+    is taken as-is rather than read as UTC midnight.
+    """
+    value = (value or "").strip()
+    if len(value) == 10:
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    dt = parse_iso(value)
+    return dt.astimezone().date() if dt is not None else None
+
+
+def local_date_str(value: str) -> str:
+    """``YYYY-MM-DD`` of :func:`to_local_date`, or ``''``."""
+    d = to_local_date(value)
+    return d.isoformat() if d is not None else ""
+
+
+def local_day_iso(day: date) -> str:
+    """A stored timestamp for a local calendar day: noon local, in UTC.
+
+    Noon rather than midnight so the instant falls on `day` in every
+    timezone this app could plausibly be used in.
+    """
+    local = datetime.combine(day, time(12)).astimezone()
+    return local.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def relative_days(iso_ts: str) -> str:
     """Human-friendly relative time: 'in 7 days', 'today', '5 days ago'.
 
-    Returns ``''`` for anything unparseable.
+    Counted in local calendar days. Returns ``''`` for anything unparseable.
     """
-    dt = parse_iso(iso_ts)
-    if dt is None:
+    d = to_local_date(iso_ts)
+    if d is None:
         return ""
-    delta_days = (dt.date() - datetime.now(timezone.utc).date()).days
+    delta_days = (d - datetime.now().astimezone().date()).days
     if delta_days == 0:
         return "today"
     if delta_days == 1:

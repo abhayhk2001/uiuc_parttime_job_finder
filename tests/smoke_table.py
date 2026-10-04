@@ -6,10 +6,15 @@ Does NOT enter the event loop.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# The table persists collapsed sections through app_settings(); keep that
+# in this script's own scope rather than the real app's.
+os.environ["JOBSCANNER_SETTINGS_APP"] = "PartTimeJobScanner-Test"
 
 from PySide6.QtCore import QCoreApplication, QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

@@ -24,13 +24,15 @@ markup looks like, instead of silently importing nothing.
 from __future__ import annotations
 
 import re
-import sys
 
 import requests
 from bs4 import BeautifulSoup
 
 from jobscanner import config
-from jobscanner.sources.base import ListingRow, Source, clean, slugify
+from jobscanner.scraper import http
+from jobscanner.sources.base import (
+    ListingParseError, ListingRow, Source, clean, slugify,
+)
 
 KEY = "lib"
 LABEL = "University Library"
@@ -155,9 +157,19 @@ def _candidates(block: list) -> list[tuple]:
 
 
 def parse_page(html: str, page_key: str, page_label: str) -> list[ListingRow]:
+    """Postings under the page's Current Openings heading.
+
+    Returns [] only when that block positively says there is nothing on
+    offer. A page with no such heading, or a block whose postings cannot
+    be picked out, raises ListingParseError: returning [] for those made a
+    markup change indistinguishable from an empty board.
+    """
     soup = BeautifulSoup(html, "html.parser")
     block = _openings_block(soup)
-    if not block or _is_empty(block):
+    if not block:
+        raise ListingParseError(
+            f"Library '{page_key}' page has no Current Openings section")
+    if _is_empty(block):
         return []
 
     rows: list[ListingRow] = []
@@ -186,12 +198,10 @@ def parse_page(html: str, page_key: str, page_label: str) -> list[ListingRow]:
         ))
 
     if not rows:
-        print(
-            f"[lib] '{page_key}' has a non-empty Current Openings block but no "
-            f"rows parsed -- the markup is not one of the shapes we handle. "
-            f"Block starts: {clean(block[0].get_text(' ', strip=True))[:120]!r}",
-            file=sys.stderr,
-        )
+        raise ListingParseError(
+            f"Library '{page_key}' has a non-empty Current Openings block but "
+            f"no rows parsed -- the markup is not one of the shapes we handle. "
+            f"Block starts: {clean(block[0].get_text(' ', strip=True))[:120]!r}")
     return rows
 
 
@@ -201,9 +211,7 @@ def fetch_listing() -> list[ListingRow]:
 
     rows: list[ListingRow] = []
     for page_key, page_label in PAGES:
-        resp = session.get(f"{BASE_URL}/{page_key}/",
-                           timeout=config.HTTP_TIMEOUT_SECONDS)
-        resp.raise_for_status()
+        resp = http.request(session, "GET", f"{BASE_URL}/{page_key}/")
         rows.extend(parse_page(resp.text, page_key, page_label))
     return rows
 
@@ -213,4 +221,5 @@ SOURCE = Source(
     label=LABEL,
     fetch_listing=fetch_listing,
     supports_detail=False,
+    empty_is_reliable=True,
 )

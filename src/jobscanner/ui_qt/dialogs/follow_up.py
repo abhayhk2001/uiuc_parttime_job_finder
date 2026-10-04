@@ -7,6 +7,7 @@ Real ``QDialog`` with a row of preset-offset buttons (1d, 3d, 1w, 2w, 1m,
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from jobscanner import config
 from jobscanner import storage as db
-from jobscanner.timeutils import add_days_iso, now_iso, parse_iso
+from jobscanner.timeutils import add_days_iso, local_day_iso, now_iso, to_local_date
 from jobscanner.ui_qt import theme
 
 
@@ -100,12 +101,10 @@ class FollowUpDialog(QDialog):
         self._date_edit = QDateEdit(self)
         self._date_edit.setCalendarPopup(True)
         self._date_edit.setDisplayFormat("yyyy-MM-dd")
-        if initial:
-            parsed = parse_iso(initial)
-            if parsed is not None:
-                self._date_edit.setDate(QDate(parsed.year, parsed.month, parsed.day))
-            else:
-                self._date_edit.setDate(QDate.currentDate())
+        # Show the stored follow-up in local days, like the picker itself.
+        parsed = to_local_date(initial) if initial else None
+        if parsed is not None:
+            self._date_edit.setDate(QDate(parsed.year, parsed.month, parsed.day))
         else:
             self._date_edit.setDate(QDate.currentDate())
         date_row.addWidget(self._date_edit, 1)
@@ -123,9 +122,11 @@ class FollowUpDialog(QDialog):
         self._save(iso)
 
     def _apply_custom(self) -> None:
+        # The picker is in local days; store that day as a UTC timestamp so
+        # it reads back on the same day. A bare "YYYY-MM-DD" was read as
+        # UTC midnight -- the previous evening in Illinois.
         qdate = self._date_edit.date()
-        iso = f"{qdate.year():04d}-{qdate.month():02d}-{qdate.day():02d}"
-        self._save(iso)
+        self._save(local_day_iso(date(qdate.year(), qdate.month(), qdate.day())))
 
     def _save(self, iso: str) -> None:
         try:

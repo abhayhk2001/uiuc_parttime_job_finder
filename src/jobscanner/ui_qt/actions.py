@@ -95,7 +95,9 @@ def build_actions(owner: QMainWindow) -> Actions:
 
     # Scan ----------------------------------------------------------------
     run_scan = QAction("&Run Scan", owner)
-    run_scan.setShortcut(QKeySequence(sequence("Return")))
+    # Cmd+Return, not a bare Return: Return alone fired a network scan
+    # from anywhere in the window, e.g. after typing in the search box.
+    run_scan.setShortcut(QKeySequence("Ctrl+Return"))
     run_scan.setStatusTip("Scan the UIUC Virtual Job Board")
 
     refresh = QAction("&Refresh", owner)

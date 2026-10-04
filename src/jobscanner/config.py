@@ -16,8 +16,9 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 # ``paths.user_*`` resolves to:
 #   - <repo>/data/ and <repo>/keywords.json when running from source, or
 #   - the platform's per-user AppData when running from a frozen bundle.
-# Callers read these at call time (not import time), so swapping modes
-# in the same process works correctly.
+# Storage and matching functions take ``path=None`` and read these
+# attributes at call time, so reassigning them (as tests/conftest.py does)
+# redirects every defaulted call. Never bind them as a default argument.
 DATA_DIR: Path = paths.user_data_dir()
 DB_PATH: Path = paths.user_db_path()
 KEYWORDS_PATH: Path = paths.user_keywords_path()

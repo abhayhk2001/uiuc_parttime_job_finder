@@ -17,7 +17,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from jobscanner import config
-from jobscanner.sources.base import ListingRow, Source, clean
+from jobscanner.scraper import http
+from jobscanner.sources.base import ListingParseError, ListingRow, Source, clean
 
 KEY = "ach"
 LABEL = "Assistantship Clearinghouse"
@@ -89,12 +90,19 @@ def parse_listing(html: str) -> list[ListingRow]:
     """Parse the clearinghouse listing.
 
     An empty board renders as <div class="field-view"></div>; that is a
-    legitimate "no openings", not a failure, so it returns [].
+    legitimate "no openings", not a failure, so it returns []. A page with
+    neither postings nor that container is not the listing at all, and
+    raises ListingParseError.
     """
     soup = BeautifulSoup(html, "html.parser")
     rows: list[ListingRow] = []
+    panels = soup.select("ilw-panel.node-assistantship, ilw-panel.node--teaser")
+    if not panels and soup.select_one(".field-view") is None:
+        raise ListingParseError(
+            "Clearinghouse page has neither postings nor the listing "
+            "container -- the markup has changed")
 
-    for panel in soup.select("ilw-panel.node-assistantship, ilw-panel.node--teaser"):
+    for panel in panels:
         link = panel.select_one("h3 a")
         if not link:
             continue
@@ -130,8 +138,7 @@ def parse_listing(html: str) -> list[ListingRow]:
 def fetch_listing() -> list[ListingRow]:
     session = requests.Session()
     session.headers.update(config.DEFAULT_HEADERS)
-    resp = session.get(LISTING_URL, timeout=config.HTTP_TIMEOUT_SECONDS)
-    resp.raise_for_status()
+    resp = http.request(session, "GET", LISTING_URL)
     return parse_listing(resp.text)
 
 
@@ -140,4 +147,5 @@ SOURCE = Source(
     label=LABEL,
     fetch_listing=fetch_listing,
     supports_detail=False,
+    empty_is_reliable=True,
 )

@@ -59,6 +59,23 @@ class JobsFilterProxy(QSortFilterProxyModel):
     def matches_only(self) -> bool:
         return self._matches_only
 
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+        """Section headings count the jobs actually shown.
+
+        The model's heading counts every job in the section, so with a
+        search active "Research Park  (15)" sat over two visible rows.
+        """
+        if (role == Qt.DisplayRole and index.isValid()
+                and not index.parent().isValid() and index.column() == 0):
+            model = self.sourceModel()
+            group_at = getattr(model, "group_at", None)
+            group = group_at(self.mapToSource(index).row()) if group_at else None
+            if group is not None:
+                shown, total = self.rowCount(index), len(group.rows)
+                count = str(total) if shown == total else f"{shown} of {total}"
+                return f"{group.label}  ({count})"
+        return super().data(index, role)
+
     # -- internals -------------------------------------------------------
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802

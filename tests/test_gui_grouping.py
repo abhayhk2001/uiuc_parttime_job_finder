@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QModelIndex, QSettings, Qt
+from PySide6.QtCore import QModelIndex, Qt
 
 from support import (  # noqa: E402
     check, eq, gui_available, pump_events, qt_only, run_module,
@@ -21,6 +21,7 @@ from support import (  # noqa: E402
 from jobscanner.sources import SOURCE_LABELS  # noqa: E402
 from jobscanner.ui_qt.jobs_table import JobsTableView, _COLLAPSED_KEY  # noqa: E402
 from jobscanner.ui_qt.models import COLUMNS, JobRoles, JobsTreeModel  # noqa: E402
+from jobscanner.ui_qt.settings import app_settings  # noqa: E402
 
 #: Deliberately out of registry order, so ordering can't pass by accident.
 ROWS = [
@@ -38,7 +39,7 @@ ROWS = [
 
 
 def _clear_collapsed() -> None:
-    QSettings("UIUC", "PartTimeJobScanner").remove(_COLLAPSED_KEY)
+    app_settings().remove(_COLLAPSED_KEY)
 
 
 def _view(rows=None) -> JobsTableView:

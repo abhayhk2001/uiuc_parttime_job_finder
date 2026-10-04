@@ -1,13 +1,14 @@
 import json
 import re
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from jobscanner import config
 from jobscanner import storage as db
 
 
-def load_keywords(path: Path = config.KEYWORDS_PATH) -> list[str]:
+def load_keywords(path: Optional[Path] = None) -> list[str]:
+    path = Path(path) if path else config.KEYWORDS_PATH
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8") as f:
@@ -17,18 +18,29 @@ def load_keywords(path: Path = config.KEYWORDS_PATH) -> list[str]:
     return [str(k).strip() for k in data if str(k).strip()]
 
 
-def _build_pattern(keywords: Iterable[str]) -> re.Pattern[str]:
-    escaped = [re.escape(k.lower()) for k in keywords]
-    if not escaped:
-        return re.compile(r"(?!x)x")
-    return re.compile(r"(?:\b(?:" + "|".join(escaped) + r")\b)", re.IGNORECASE)
+def _keyword_pattern(keyword: str) -> re.Pattern[str]:
+    """Whole-word pattern for one keyword.
+
+    Bounded by "not a word character" lookarounds rather than ``\b``:
+    ``\b`` needs a word character on its inner side, so keywords that
+    start or end with a symbol -- ``C++``, ``C#``, ``.NET`` -- could never
+    match at all.
+    """
+    return re.compile(r"(?<!\w)" + re.escape(keyword) + r"(?!\w)",
+                      re.IGNORECASE)
 
 
 def match(keywords: list[str], haystack: str) -> list[str]:
+    """Every keyword that occurs in `haystack`, lowercased and sorted.
+
+    Each keyword is searched on its own. One alternation over all of them
+    consumed the text as it matched, so of two overlapping keywords ("data"
+    and "data science") only whichever came first was ever reported.
+    """
     if not keywords or not haystack:
         return []
-    pattern = _build_pattern(keywords)
-    found = {m.group(0).lower() for m in pattern.finditer(haystack)}
+    found = {k.lower() for k in keywords
+             if k and _keyword_pattern(k).search(haystack)}
     return sorted(found)
 
 
@@ -40,7 +52,7 @@ def find_matches(job_record: dict, keywords: list[str]) -> list[str]:
     return match(keywords, haystack)
 
 
-def rematch_all(keywords: list[str], path: Path = config.DB_PATH) -> int:
+def rematch_all(keywords: list[str], path: Optional[Path] = None) -> int:
     """Re-run matching for every job in the DB against the given keywords.
 
     Returns the number of job rows updated. Used by the GUI keyword editor

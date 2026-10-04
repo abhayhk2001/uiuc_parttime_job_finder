@@ -6,15 +6,22 @@ Does NOT enter the event loop -- just builds everything and exits.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+# Keep this script's window state and data out of the real app's: its own
+# QSettings scope, and a throwaway DB instead of config.DB_PATH.
+os.environ["JOBSCANNER_SETTINGS_APP"] = "PartTimeJobScanner-Smoke"
+
 from PySide6.QtCore import QCoreApplication, QSettings  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMenu  # noqa: E402
 
-from jobscanner import config  # noqa: E402
+from support import TempDB  # noqa: E402
+
+from jobscanner import storage as db  # noqa: E402
 from jobscanner.ui_qt import palette, shortcuts, theme  # noqa: E402
 from jobscanner.ui_qt.app import JobScannerApp  # noqa: E402
 
@@ -24,8 +31,14 @@ def _is_dark(p) -> bool:
 
 
 def main() -> int:
+    with TempDB() as db_path:
+        db.init_db(db_path)
+        return _main(db_path)
+
+
+def _main(db_path: Path) -> int:
     QCoreApplication.setOrganizationName("UIUC")
-    QCoreApplication.setApplicationName("PartTimeJobScanner")
+    QCoreApplication.setApplicationName("PartTimeJobScanner-Smoke")
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationDisplayName("UIUC Part-Time Job Scanner")
@@ -62,7 +75,7 @@ def main() -> int:
     print("apply_app is idempotent")
 
     # Build the window (no show, no exec).
-    w = JobScannerApp(config.DB_PATH, config.KEYWORDS_PATH)
+    w = JobScannerApp(db_path, db_path.parent / "keywords.json")
     assert w.windowTitle() == "UIUC Part-Time Job Scanner"
     assert w.minimumWidth() == 1080 and w.minimumHeight() == 640
     assert w.centralWidget() is not None
@@ -79,10 +92,6 @@ def main() -> int:
     print(f"toolbar            = {w.toolbar.objectName()}")
     print(f"status message     = {w.status_bar.currentMessage()}")
 
-    # Trigger a not-implemented handler.
-    w._not_implemented("Test stub")()
-    assert "Test stub" in w.status_bar.currentMessage()
-    print(f"not_implemented stub -> {w.status_bar.currentMessage()!r}")
 
     # Save + restore geometry round-trip.
     w.resize(1200, 700)
@@ -92,7 +101,7 @@ def main() -> int:
     QSettings().setValue("window/geometry", geo)
     QSettings().setValue("window/state", state)
 
-    w2 = JobScannerApp(config.DB_PATH, config.KEYWORDS_PATH)
+    w2 = JobScannerApp(db_path, db_path.parent / "keywords.json")
     print(f"restored size      = {w2.size().width()}x{w2.size().height()}")
 
     print("skeleton smoke test OK")

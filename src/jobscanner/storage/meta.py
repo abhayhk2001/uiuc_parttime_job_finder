@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from jobscanner import config
 from jobscanner.storage.schema import connect
@@ -15,7 +16,7 @@ META_KEY_SASH_WIDTHS = "sash_widths_px"
 META_KEY_LAYOUT = "ui_layout"
 
 
-def get_meta(key: str, path: Path = config.DB_PATH) -> str:
+def get_meta(key: str, path: Optional[Path] = None) -> str:
     with connect(path) as conn:
         row = conn.execute(
             "SELECT value FROM meta WHERE key = ?", (key,)
@@ -23,7 +24,7 @@ def get_meta(key: str, path: Path = config.DB_PATH) -> str:
     return row[0] if row else ""
 
 
-def set_meta(key: str, value: str, path: Path = config.DB_PATH) -> None:
+def set_meta(key: str, value: str, path: Optional[Path] = None) -> None:
     with connect(path) as conn:
         conn.execute(
             "INSERT INTO meta(key, value) VALUES (?, ?) "
@@ -33,12 +34,14 @@ def set_meta(key: str, value: str, path: Path = config.DB_PATH) -> None:
         conn.commit()
 
 
-def get_latest_scan_started_at(path: Path = config.DB_PATH) -> str:
-    """ISO timestamp of the most recent completed scan, or ``''`` if none."""
+def get_latest_scan_started_at(path: Optional[Path] = None) -> str:
+    """Start time of the most recent scan that reached at least one source,
+    or ``''`` if none has. It is the New/Old boundary, so pipeline.run only
+    writes it once a scan has actually fetched something."""
     return get_meta(META_KEY_LATEST_SCAN_STARTED_AT, path)
 
 
-def set_latest_scan_started_at(value: str, path: Path = config.DB_PATH) -> None:
+def set_latest_scan_started_at(value: str, path: Optional[Path] = None) -> None:
     set_meta(META_KEY_LATEST_SCAN_STARTED_AT, value, path)
 
 
@@ -47,7 +50,7 @@ def set_latest_scan_started_at(value: str, path: Path = config.DB_PATH) -> None:
 # ---------------------------------------------------------------------------
 
 
-def get_sash_widths(path: Path = config.DB_PATH) -> list[int] | None:
+def get_sash_widths(path: Optional[Path] = None) -> list[int] | None:
     """Return persisted [sidebar, table, detail] widths in px, or None."""
     raw = get_meta(META_KEY_SASH_WIDTHS, path)
     if not raw:
@@ -63,7 +66,7 @@ def get_sash_widths(path: Path = config.DB_PATH) -> list[int] | None:
     return None
 
 
-def set_sash_widths(widths: list[int], path: Path = config.DB_PATH) -> None:
+def set_sash_widths(widths: list[int], path: Optional[Path] = None) -> None:
     """Persist [sidebar, table, detail] widths in px to the meta table."""
     set_meta(META_KEY_SASH_WIDTHS, json.dumps(list(widths)), path)
 
@@ -76,7 +79,7 @@ DEFAULT_LAYOUT: dict = {
 }
 
 
-def get_layout(path: Path = config.DB_PATH) -> dict:
+def get_layout(path: Optional[Path] = None) -> dict:
     """Return the persisted window layout, falling back to DEFAULT_LAYOUT.
 
     Unknown or malformed values are ignored rather than raising -- a bad
@@ -104,7 +107,7 @@ def get_layout(path: Path = config.DB_PATH) -> dict:
     return layout
 
 
-def set_layout(values: dict, path: Path = config.DB_PATH) -> None:
+def set_layout(values: dict, path: Optional[Path] = None) -> None:
     """Merge `values` into the persisted layout."""
     layout = get_layout(path)
     layout.update({k: v for k, v in values.items() if k in DEFAULT_LAYOUT})

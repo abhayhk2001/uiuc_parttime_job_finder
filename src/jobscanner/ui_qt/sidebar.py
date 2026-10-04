@@ -117,10 +117,10 @@ class SectionsList(QWidget):
         layout.addWidget(header)
         layout.addWidget(self._view, 1)
 
-        self._view.clicked.connect(self._on_clicked)
-        self._view.activated.connect(self._on_clicked)
-
-        # Highlight the current section by tying selection to the model.
+        # Selection is driven by currentChanged alone, which covers clicks
+        # and arrow keys. Also listening to clicked/activated emitted
+        # sectionSelected two or three times per click, each one a full
+        # database query and model reset.
         self._view.selectionModel().currentChanged.connect(
             self._on_current_changed)
 
@@ -142,11 +142,6 @@ class SectionsList(QWidget):
             if self._model.data(idx, _SectionsModel.KEY_ROLE) == self._model.current_key():
                 self._view.setCurrentIndex(idx)
                 return
-
-    def _on_clicked(self, index: QModelIndex) -> None:
-        key = self._model.data(index, _SectionsModel.KEY_ROLE)
-        if key:
-            self.sectionSelected.emit(str(key))
 
     def _on_current_changed(self, current: QModelIndex, _previous) -> None:
         if not current.isValid():
@@ -310,6 +305,11 @@ class SidebarDock(QDockWidget):
                          counts: dict, current: str) -> None:
         self._sections.set_sections(sections, current)
         self._bulk.set_enabled_by_section(counts)
+
+    def set_bulk_enabled(self, enabled: bool) -> None:
+        """Enable or disable the whole bulk block (e.g. while scanning).
+        Each button keeps its own count-based state underneath."""
+        self._bulk.setEnabled(enabled)
 
     def set_current_section(self, current: str) -> None:
         self._sections.set_current(current)
