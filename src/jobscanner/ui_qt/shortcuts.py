@@ -22,12 +22,12 @@ def sequence(scoped: str) -> str:
     Pass the bare key name (``"F"``, ``"Q"``, ``"Return"``, ...); this
     helper prepends the platform accelerator.
 
-    On macOS Qt expects the modifier name ``Meta``, not ``Cmd``. The
-    human-readable ``Cmd`` is reserved for menu labels, where the OS
-    rewrites it at draw time.
+    The modifier is spelled ``Ctrl`` on every platform: on macOS Qt maps
+    ``Ctrl`` to the Command key and ``Meta`` to the Control key, so
+    ``Meta`` here bound every shortcut to Control. The human-readable
+    ``Cmd`` from :func:`accel` is only for labels.
     """
     if scoped in {"Return", "Enter", "Escape", "Esc", "Tab", "Backtab",
                   "Space", "Left", "Right", "Up", "Down"}:
         return scoped
-    modifier = "Meta" if sys.platform == "darwin" else "Ctrl"
-    return f"{modifier}+{scoped}"
+    return f"Ctrl+{scoped}"

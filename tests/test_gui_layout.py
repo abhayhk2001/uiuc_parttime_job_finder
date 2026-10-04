@@ -134,8 +134,8 @@ def test_layout_is_restored_on_relaunch() -> None:
     from jobscanner.ui_qt import app as gui_mod
 
     # Clean slate for the persisted state we care about.
-    from PySide6.QtCore import QSettings
-    settings = QSettings("UIUC", "PartTimeJobScanner")
+    from jobscanner.ui_qt.settings import app_settings
+    settings = app_settings()
     settings.remove("window/geometry")
     settings.remove("window/state")
     settings.remove("window/splitter_sizes")

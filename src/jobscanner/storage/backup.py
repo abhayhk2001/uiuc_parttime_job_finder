@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-import shutil
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from jobscanner import config
+from jobscanner.storage.schema import resolve
 
 
 def _backup_basename(ts: datetime) -> str:
@@ -22,7 +22,7 @@ def _backup_basename(ts: datetime) -> str:
 
 
 def backup_db(
-    path: Path = config.DB_PATH,
+    path: Optional[Path] = None,
     now: Optional[datetime] = None,
 ) -> Optional[Path]:
     """Copy `path` to a timestamped `.bak` file. Returns the new path on
@@ -30,15 +30,26 @@ def backup_db(
     it). Best-effort: logs to stderr but never raises — a failed backup
     must not abort a real scan.
     """
+    path = resolve(path)
     if not path.exists():
         return None
     ts = now or datetime.now(timezone.utc)
     backup_path = path.with_name(f"{path.name}.bak.{_backup_basename(ts)}")
     try:
         # Copy to a tmp name first, then atomically replace, so a partial
-        # copy never leaves a half-written backup.
+        # copy never leaves a half-written backup. SQLite's online backup
+        # API rather than a file copy: it takes a consistent snapshot even
+        # if another connection (a cron scan, the GUI) is mid-write.
         tmp = backup_path.with_suffix(backup_path.suffix + ".partial")
-        shutil.copy2(path, tmp)
+        src = sqlite3.connect(path)
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
         os.replace(tmp, backup_path)
         return backup_path
     except Exception as exc:
@@ -47,7 +58,7 @@ def backup_db(
 
 
 def prune_old_backups(
-    path: Path = config.DB_PATH,
+    path: Optional[Path] = None,
     keep: int = 3,
 ) -> int:
     """Delete older ``<path>.bak.*`` files beyond the most recent `keep`.
@@ -55,6 +66,7 @@ def prune_old_backups(
     Returns the number of files deleted. Newest-first ordering uses the
     lexicographic timestamp suffix (ISO-8601 sorts correctly).
     """
+    path = resolve(path)
     if keep < 0:
         keep = 0
     pattern = f"{path.name}.bak.*"

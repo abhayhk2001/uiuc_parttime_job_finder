@@ -19,6 +19,8 @@ data/*.db-shm
 # Keep them out of git — they're user data and are rotated by db.py.
 data/*.bak.*
 data/*.bak.*.partial
+# One-off copies taken before a manual repair; never pruned automatically.
+data/*.pre-repair-*
 
 # OS junk
 .DS_Store

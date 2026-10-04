@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator, Optional
 
 from jobscanner import config
 
@@ -26,7 +28,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   follow_up_at     TEXT,
   archived         INTEGER NOT NULL DEFAULT 0,
   archived_at      TEXT,
-  source           TEXT NOT NULL DEFAULT 'vjb'
+  source           TEXT NOT NULL DEFAULT 'vjb',
+  auto_archived    INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -47,6 +50,10 @@ _MIGRATIONS: tuple[tuple[str, str], ...] = (
     # Added when the scanner grew beyond the Virtual Job Board. Every row
     # that predates multi-source support came from VJB, hence the default.
     ("source", "TEXT NOT NULL DEFAULT 'vjb'"),
+    # 1 when the scanner archived the row because it left its board, so a
+    # later scan that lists it again knows it may restore it. Rows the user
+    # archived by hand keep 0 and stay archived.
+    ("auto_archived", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 # Indexes worth having once the backing column exists.
@@ -86,17 +93,37 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
-def connect(path: Path = config.DB_PATH) -> sqlite3.Connection:
-    """Open a connection. Callers use it as `with connect(p) as conn:`,
-    which commits on success — it does not close, matching sqlite3's
-    context-manager semantics."""
-    return sqlite3.connect(path)
+def resolve(path: Optional[Path]) -> Path:
+    """`path`, or the configured DB when it is None.
+
+    Read at call time rather than bound as a default argument: a default of
+    ``config.DB_PATH`` is evaluated once at import, so redirecting
+    ``config.DB_PATH`` afterwards (as the test suite does) would silently
+    leave every defaulted call pointed at the real database.
+    """
+    return Path(path) if path else config.DB_PATH
 
 
-def init_db(path: Path = config.DB_PATH) -> None:
+@contextmanager
+def connect(path: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
+    """Open a connection for one `with connect(p) as conn:` block.
+
+    Commits on success, rolls back on error, and always closes -- sqlite3's
+    own context manager does the first two but leaves the connection open.
+    """
+    conn = sqlite3.connect(resolve(path))
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def init_db(path: Optional[Path] = None) -> None:
     """Create the schema if needed and run any pending migrations."""
+    path = resolve(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with connect(path) as conn:
         conn.executescript(SCHEMA)
         conn.commit()
         cols = _table_columns(conn, "jobs")

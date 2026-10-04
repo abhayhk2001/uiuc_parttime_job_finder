@@ -16,10 +16,17 @@ So nothing in the UI should construct a bare QSettings. Use
 
 from __future__ import annotations
 
+import os
+
 from PySide6.QtCore import QSettings
 
+#: Names the scope the test suite and smoke scripts use instead of the
+#: real one, so a test run never reads or overwrites the user's window
+#: layout (tests/conftest.py sets it before anything imports this module).
+SETTINGS_APP_ENV = "JOBSCANNER_SETTINGS_APP"
+
 ORG = "UIUC"
-APP = "PartTimeJobScanner"
+APP = os.environ.get(SETTINGS_APP_ENV) or "PartTimeJobScanner"
 
 
 def app_settings() -> QSettings:

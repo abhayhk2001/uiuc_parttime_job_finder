@@ -1,13 +1,14 @@
 import json
 import re
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from jobscanner import config
 from jobscanner import storage as db
 
 
-def load_keywords(path: Path = config.KEYWORDS_PATH) -> list[str]:
+def load_keywords(path: Optional[Path] = None) -> list[str]:
+    path = Path(path) if path else config.KEYWORDS_PATH
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8") as f:
@@ -40,7 +41,7 @@ def find_matches(job_record: dict, keywords: list[str]) -> list[str]:
     return match(keywords, haystack)
 
 
-def rematch_all(keywords: list[str], path: Path = config.DB_PATH) -> int:
+def rematch_all(keywords: list[str], path: Optional[Path] = None) -> int:
     """Re-run matching for every job in the DB against the given keywords.
 
     Returns the number of job rows updated. Used by the GUI keyword editor

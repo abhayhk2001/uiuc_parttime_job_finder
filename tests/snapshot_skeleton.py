@@ -6,15 +6,22 @@ Uses ``QWidget.grab()`` so no real display server interaction is needed.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+# Keep this script's window state and data out of the real app's: its own
+# QSettings scope, and a throwaway DB instead of config.DB_PATH.
+os.environ["JOBSCANNER_SETTINGS_APP"] = "PartTimeJobScanner-Snapshot"
+
 from PySide6.QtCore import QCoreApplication  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from jobscanner import config  # noqa: E402
+from support import TempDB  # noqa: E402
+
+from jobscanner import storage as db  # noqa: E402
 from jobscanner.ui_qt import theme  # noqa: E402
 from jobscanner.ui_qt.app import JobScannerApp  # noqa: E402
 
@@ -73,13 +80,19 @@ def fake_rows() -> list[dict]:
 
 
 def main() -> int:
+    with TempDB() as db_path:
+        db.init_db(db_path)
+        return _main(db_path)
+
+
+def _main(db_path: Path) -> int:
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/skeleton.png")
     QCoreApplication.setOrganizationName("UIUC")
     QCoreApplication.setApplicationName("PartTimeJobScanner-Snapshot")
     app = QApplication.instance() or QApplication(sys.argv)
     theme.apply_app(app)
 
-    w = JobScannerApp(config.DB_PATH, config.KEYWORDS_PATH)
+    w = JobScannerApp(db_path, db_path.parent / "keywords.json")
     w.resize(1380, 860)
     w._table.set_rows(fake_rows())
     w.show()

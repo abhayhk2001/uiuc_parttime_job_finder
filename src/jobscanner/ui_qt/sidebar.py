@@ -311,6 +311,11 @@ class SidebarDock(QDockWidget):
         self._sections.set_sections(sections, current)
         self._bulk.set_enabled_by_section(counts)
 
+    def set_bulk_enabled(self, enabled: bool) -> None:
+        """Enable or disable the whole bulk block (e.g. while scanning).
+        Each button keeps its own count-based state underneath."""
+        self._bulk.setEnabled(enabled)
+
     def set_current_section(self, current: str) -> None:
         self._sections.set_current(current)
 

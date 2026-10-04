@@ -591,6 +591,162 @@ def test_set_follow_up_overrides_default() -> None:
             "explicit set_follow_up should override default")
 
 
+
+# ---------------------------------------------------------------------------
+# Reversible auto-archive, scan cutoff, listing vs detail fields
+# ---------------------------------------------------------------------------
+
+
+def _listing(jid: str, title: str = "", company: str = "") -> dict:
+    return {"job_id": jid, "title": title, "company": company,
+            "date_posted": "", "detail_url": "https://example.org/" + jid}
+
+
+def _make_stale(p: Path, jid: str) -> None:
+    with sqlite3.connect(p) as conn:
+        conn.execute(
+            "UPDATE jobs SET last_seen_at = '2020-01-01T00:00:00+00:00' "
+            "WHERE job_id = ?", (jid,))
+        conn.commit()
+
+
+def test_auto_archived_job_returns_when_listed_again() -> None:
+    """One scan that missed a posting used to bury it in Archived for good,
+    even with an application on file."""
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(_listing("vjb:1", "Office Help"), p)
+        db.mark_applied("vjb:1", p)
+        _make_stale(p, "vjb:1")
+        _eq(db.auto_archive_removed_jobs(db.now_iso(), "vjb", p), 1,
+            "the missed posting is auto-archived")
+
+        db.upsert_listing(_listing("vjb:1", "Office Help"), p)
+        row = db.get_job("vjb:1", p)
+        _eq(row["archived"], 0, "seeing it again restores it")
+        _eq(row["archived_at"], None, "and clears archived_at")
+        _eq(row["auto_archived"], 0, "and the auto flag")
+        _eq(db.get_section_counts(p)["follow_up"], 1,
+            "it is back in Applied, application intact")
+
+
+def test_user_archived_job_stays_archived_when_listed() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(_listing("vjb:2", "Not for me"), p)
+        db.archive_job("vjb:2", p)
+        db.upsert_listing(_listing("vjb:2", "Not for me"), p)
+        _eq(db.get_job("vjb:2", p)["archived"], 1,
+            "a job the user archived is not brought back by a scan")
+
+
+def test_listing_fills_but_does_not_overwrite_when_told_not_to() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(_listing("vjb:3", "Real Title", "Dept"), p)
+        db.upsert_listing(_listing("vjb:3", "Dept", "Dept"), p,
+                          overwrite=False)
+        _eq(db.get_job("vjb:3", p)["title"], "Real Title",
+            "overwrite=False keeps the stored title")
+
+        with sqlite3.connect(p) as conn:
+            conn.execute("UPDATE jobs SET company = '' WHERE job_id = 'vjb:3'")
+            conn.commit()
+        db.upsert_listing(_listing("vjb:3", "Dept", "Dept"), p,
+                          overwrite=False)
+        _eq(db.get_job("vjb:3", p)["company"], "Dept",
+            "but still fills an empty field")
+
+        db.upsert_listing(_listing("vjb:3", "Newer Title"), p)
+        _eq(db.get_job("vjb:3", p)["title"], "Newer Title",
+            "the default still overwrites")
+
+
+def test_detail_title_survives_a_rescan() -> None:
+    """VJB's listing carries only the department. Each re-scan wrote it
+    back over the real title that fetch_detail had stored."""
+    from jobscanner import pipeline
+    from jobscanner.sources.base import Detail, ListingRow, Source
+
+    def _listing_rows():
+        return [ListingRow(native_id="9", title="Dean of Students Office",
+                           company="Dean of Students Office",
+                           detail_url="https://example.org/9")]
+
+    def _detail(row):
+        row.title = "General Office Help"
+        return Detail(job_description="Answer phones.")
+
+    src = Source(key="vjb", label="VJB", fetch_listing=_listing_rows,
+                 supports_detail=True, fetch_detail=_detail)
+    with _TempDB() as p:
+        db.init_db(p)
+        for _ in range(2):
+            pipeline._scan_source(src, [], db.now_iso(), dry_run=False,
+                                  verbose=False, fetch_missing=True, path=p)
+        _eq(db.get_job("vjb:9", p)["title"], "General Office Help",
+            "the second scan keeps the title from the detail page")
+
+
+def test_failed_scan_keeps_the_new_cutoff() -> None:
+    """The cutoff was written before any fetch, so a scan with no network
+    moved every New job into Old and still reported success."""
+    from jobscanner import pipeline
+    from jobscanner.sources.base import Source
+
+    def _boom():
+        raise RuntimeError("network down")
+
+    broken = (Source(key="vjb", label="VJB", fetch_listing=_boom),
+              Source(key="rp", label="Research Park", fetch_listing=_boom))
+    with _TempDB() as p:
+        db.init_db(p)
+        db.set_latest_scan_started_at("2026-01-01T00:00:00+00:00", p)
+        db.upsert_listing(_listing("vjb:5", "Still new"), p)
+        original = pipeline.SOURCES
+        pipeline.SOURCES = broken
+        try:
+            rc = pipeline.run(path=p)
+        finally:
+            pipeline.SOURCES = original
+        _eq(rc, 1, "a scan that reached no source reports failure")
+        _eq(db.get_latest_scan_started_at(p), "2026-01-01T00:00:00+00:00",
+            "and leaves the New/Old cutoff where it was")
+        _eq(db.get_section_counts(p)["new"], 1, "so New keeps its job")
+
+
+def test_bulk_mark_all_applied_skips_archived_rows() -> None:
+    """The bare `to_apply = 1` filter matched archived rows, and the Applied
+    assignments un-archived them."""
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("vjb:6", "vjb:7"):
+            db.upsert_listing(_listing(jid, jid), p)
+            db.set_to_apply(jid, True, p)
+        db.archive_job("vjb:7", p)
+        _eq(db.bulk_mark_all_applied(p), 1, "only the visible To Apply row")
+        _eq(db.get_job("vjb:7", p)["archived"], 1, "the archived one stays put")
+        _eq(db.bulk_clear_to_apply(p), 0, "nothing left in To Apply")
+        _eq(db.get_job("vjb:7", p)["to_apply"], 1,
+            "clear also leaves archived rows alone")
+
+
+def test_defaulted_calls_follow_config_db_path() -> None:
+    """`path=config.DB_PATH` defaults were bound at import, so redirecting
+    config left every defaulted call pointed at the real database."""
+    with _TempDB() as p:
+        original = config.DB_PATH
+        config.DB_PATH = p
+        try:
+            db.init_db()
+            db.upsert_listing(_listing("vjb:8", "Defaulted"))
+            _eq(len(db.get_all_jobs()), 1, "read back through the default")
+        finally:
+            config.DB_PATH = original
+        _eq([r["job_id"] for r in db.get_all_jobs(p)], ["vjb:8"],
+            "and it landed in the redirected database")
+
+
 if __name__ == "__main__":
     _, failed, _ = run_module(globals(), "Storage layer")
     sys.exit(1 if failed else 0)

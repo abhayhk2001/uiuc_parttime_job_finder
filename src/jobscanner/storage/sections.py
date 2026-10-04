@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from jobscanner import config
 from jobscanner.storage.meta import get_latest_scan_started_at
@@ -129,7 +129,7 @@ def get_jobs_by_section(
     section: str,
     query: str = "",
     matches_only: bool = False,
-    path: Path = config.DB_PATH,
+    path: Optional[Path] = None,
 ) -> list[dict]:
     """Return jobs belonging to `section` (one of VALID_SECTIONS),
     optionally narrowed by free-text `query` and/or `matches_only`."""
@@ -162,7 +162,7 @@ def get_jobs_by_section(
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
-def get_section_counts(path: Path = config.DB_PATH) -> dict:
+def get_section_counts(path: Optional[Path] = None) -> dict:
     """Row count per counted section, plus ``total``."""
     cutoff = get_latest_scan_started_at(path)
     counts: dict[str, int] = {}
@@ -177,7 +177,7 @@ def get_section_counts(path: Path = config.DB_PATH) -> dict:
     return counts
 
 
-def get_stats(path: Path = config.DB_PATH) -> dict:
+def get_stats(path: Optional[Path] = None) -> dict:
     """Whole-database totals for the status bar.
 
     Note ``reviewed`` and ``to_apply`` here are raw flag counts across the

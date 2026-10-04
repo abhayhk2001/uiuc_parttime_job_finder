@@ -57,7 +57,7 @@ def _scan_source(
     dry_run: bool,
     verbose: bool,
     fetch_missing: bool,
-    path: Path = config.DB_PATH,
+    path: Optional[Path] = None,
 ) -> tuple[SourceResult, list[dict]]:
     result = SourceResult(key=source.key, label=source.label)
     match_jobs: list[dict] = []
@@ -89,8 +89,12 @@ def _scan_source(
                       f"({r.title!r})")
         return result, match_jobs
 
+    # For a source with detail pages, the listing must not overwrite what
+    # the detail page stored: VJB's listing title is the department, and
+    # writing it back on every scan undid the real title from fetch_detail.
     for r in rows:
-        db.upsert_listing(_row_to_record(r, source), path)
+        db.upsert_listing(_row_to_record(r, source), path,
+                          overwrite=not source.supports_detail)
 
     # Decide which rows still need their detail text.
     need_detail = [r.job_id(source.key) for r in new_rows]
@@ -240,12 +244,11 @@ def run(dry_run: bool = False, verbose: bool = False,
     keywords = matching.load_keywords()
     print(f"[init] Loaded {len(keywords)} keywords from {config.KEYWORDS_PATH}")
 
+    # The New/Old cutoff is this timestamp, but it is only recorded once
+    # the scan has reached at least one source (below). Writing it up front
+    # meant a scan with no network moved every New job into Old.
     scan_started_at = db.now_iso()
-    if not dry_run:
-        db.set_latest_scan_started_at(scan_started_at, path)
-        print(f"[init] Scan started at {scan_started_at}")
-    else:
-        print("[init] Dry run — scan-started timestamp not advanced.")
+    print(f"[init] Scan started at {scan_started_at}")
 
     results: list[SourceResult] = []
     all_matches: list[dict] = []
@@ -255,6 +258,15 @@ def run(dry_run: bool = False, verbose: bool = False,
             fetch_missing, path)
         results.append(result)
         all_matches.extend(matches)
+
+    any_ok = any(r.ok for r in results)
+    if dry_run:
+        print("[init] Dry run — scan-started timestamp not advanced.")
+    elif any_ok:
+        db.set_latest_scan_started_at(scan_started_at, path)
+    else:
+        print("[done] No source could be reached; keeping the previous "
+              "scan cutoff so New is left as it was.", file=sys.stderr)
 
     alerts.alert(all_matches)
 
@@ -269,5 +281,6 @@ def run(dry_run: bool = False, verbose: bool = False,
         print(f"[done] {len(failed)} source(s) failed: {', '.join(failed)}",
               file=sys.stderr)
     # A partial scan is still a successful run; the GUI and cron should not
-    # treat one flaky board as a fatal error.
-    return 0
+    # treat one flaky board as a fatal error. A scan that reached no board
+    # at all is a failure, and the GUI must not report it as complete.
+    return 0 if any_ok else 1

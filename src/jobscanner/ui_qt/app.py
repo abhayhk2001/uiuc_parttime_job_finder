@@ -110,6 +110,7 @@ class JobScannerApp(QMainWindow):
         self._scanning = False
         self._scan_thread: QThread | None = None
         self._scan_worker: ScanWorker | None = None
+        self._close_after_scan = False
 
         # Central widget: search row on top of the jobs table, then the
         # table itself. Step 5 will replace the placeholder detail pane.
@@ -209,11 +210,13 @@ class JobScannerApp(QMainWindow):
     # -- refresh ---------------------------------------------------------
 
     def refresh(self) -> None:
+        # Load the whole section and leave search / matches-only to the
+        # proxy. Filtering here too meant the model only ever held the rows
+        # that matched at refresh time, so clearing the search box could not
+        # bring the rest back until the next refresh.
         try:
             rows = db.get_jobs_by_section(
                 section=self._section,
-                query=self._table.proxy().search_text(),
-                matches_only=self._table.proxy().matches_only(),
                 path=self.db_path,
             )
         except Exception as exc:  # noqa: BLE001
@@ -281,8 +284,15 @@ class JobScannerApp(QMainWindow):
         action = BULK_ACTIONS_BY_ID.get(action_id)
         if action is None:
             return
-        if action.confirm and QMessageBox.question(
-            self, action.label, action.confirm,
+        if self._scanning:
+            # A scan is inserting rows into New right now; a bulk action
+            # would sweep up rows the user has never seen.
+            self.status_bar.showMessage(
+                "Wait for the scan to finish before running bulk actions.", 5000)
+            return
+        prompt = self._bulk_confirmation(action)
+        if prompt and QMessageBox.question(
+            self, action.label, prompt,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) != QMessageBox.Yes:
             return
@@ -294,6 +304,29 @@ class JobScannerApp(QMainWindow):
         self.refresh()
         self.status_bar.showMessage(action.message(affected), 5000)
 
+    def _bulk_confirmation(self, action) -> str:
+        """The confirmation text for `action`, or ``''`` to act at once.
+
+        Bulk actions run on the whole section in the database, not on the
+        rows the table is showing. With a search or matches-only filter
+        active those differ, so even a normally immediate action asks first
+        and says how many rows it will really touch.
+        """
+        proxy = self._table.proxy()
+        filtered = bool(proxy.search_text() or proxy.matches_only())
+        if not action.confirm and not filtered:
+            return ""
+        try:
+            count = db.get_section_counts(self.db_path).get(action.section, 0)
+        except Exception:  # noqa: BLE001
+            count = 0
+        label = db.SECTION_LABELS.get(action.section, action.section)
+        scope = f"This affects all {count} job(s) in {label}"
+        if filtered:
+            scope += ", including any hidden by the current search or filter"
+        lead = action.confirm or f"{action.label}?"
+        return f"{lead}\n\n{scope}."
+
     def _open_keyword_editor(self) -> None:
         def _on_save(new_keywords: list[str]) -> None:
             try:
@@ -304,10 +337,10 @@ class JobScannerApp(QMainWindow):
                 QMessageBox.critical(self, "Re-match failed", str(exc))
             self.refresh()
 
-        KeywordsDialog(self, self.keywords_path, on_save=_on_save)
+        KeywordsDialog(self, self.keywords_path, on_save=_on_save).exec()
 
     def _open_preferences(self) -> None:
-        PreferencesDialog(self)
+        PreferencesDialog(self).exec()
 
     # -- detail pane actions -------------------------------------------
 
@@ -337,7 +370,7 @@ class JobScannerApp(QMainWindow):
         FollowUpDialog(
             self, job_id, (job.get("follow_up_at") or "")[:10],
             on_save=self.refresh, db_path=self.db_path,
-        )
+        ).exec()
 
     # -- table selection handlers --------------------------------------
 
@@ -421,6 +454,7 @@ class JobScannerApp(QMainWindow):
         self.actions.run_scan.setEnabled(False)
         self.actions.run_scan.setText("Scanning\u2026")
         self.status_bar.showMessage("Scanning\u2026")
+        self.sidebar.set_bulk_enabled(False)
 
         # Show the log dock while scanning so the user sees progress.
         if not self.log_dock.isVisible():
@@ -444,6 +478,7 @@ class JobScannerApp(QMainWindow):
         self._scanning = False
         self.actions.run_scan.setEnabled(True)
         self.actions.run_scan.setText("&Run Scan")
+        self.sidebar.set_bulk_enabled(True)
         if success:
             self.status_bar.showMessage("Scan complete.", 5000)
         else:
@@ -451,6 +486,8 @@ class JobScannerApp(QMainWindow):
         self.refresh()
         self._scan_worker = None
         self._scan_thread = None
+        if self._close_after_scan:
+            self.close()
 
     def _on_color_scheme_changed(self, _scheme) -> None:
         self._table.refresh_palette()
@@ -460,9 +497,9 @@ class JobScannerApp(QMainWindow):
     def _install_section_shortcuts(self) -> None:
         from PySide6.QtGui import QShortcut, QKeySequence
 
-        prefix = "Meta" if accel() == "Cmd" else "Ctrl"
+        # "Ctrl" is Cmd on macOS -- Qt swaps them there.
         for i, section in enumerate(db.COUNTED_SECTIONS[:9], start=1):
-            QShortcut(QKeySequence(f"{prefix}+{i}"), self,
+            QShortcut(QKeySequence(f"Ctrl+{i}"), self,
                       activated=lambda s=section: self.select_section(s))
 
     def _show_about(self) -> None:
@@ -471,17 +508,26 @@ class JobScannerApp(QMainWindow):
             f"About {APP_TITLE}",
             f"<b>{APP_TITLE}</b><br>"
             "Scans the UIUC Virtual Job Board and tracks postings.<br><br>"
-            f"Accelerator: {accel()} · Qt {QT_VERSION_STR if (QT_VERSION_STR := self._qt_version()) else ''}",
+            f"Accelerator: {accel()} · PySide {self._qt_version()}",
         )
 
     @staticmethod
     def _qt_version() -> str:
         from PySide6 import __version__ as pyside_version
-        return f"{pyside_version} / Qt {QT_VERSION}" if (QT_VERSION := _qt_runtime_version()) else pyside_version
+        from PySide6.QtCore import qVersion
+        return f"{pyside_version} / Qt {qVersion()}"
 
     # -- close ---------------------------------------------------------
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        # The scan thread is a child of this window; destroying it while it
+        # runs aborts the process mid-write. Hold the close until it ends.
+        if self._scanning:
+            self._close_after_scan = True
+            self.status_bar.showMessage(
+                "Will quit when the scan finishes\u2026")
+            event.ignore()
+            return
         settings = app_settings()
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/state", self.saveState())
