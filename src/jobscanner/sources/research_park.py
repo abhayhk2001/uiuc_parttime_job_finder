@@ -26,8 +26,13 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
+import hashlib
+
 from jobscanner import config
-from jobscanner.sources.base import Detail, ListingRow, Source, clean, slugify
+from jobscanner.scraper import http
+from jobscanner.sources.base import (
+    Detail, ListingParseError, ListingRow, Source, clean, slugify,
+)
 
 KEY = "rp"
 LABEL = "Research Park"
@@ -46,8 +51,8 @@ _SHORT_DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{2})$")
 
 
 def _post(session: requests.Session, page: int) -> dict:
-    resp = session.post(
-        LISTINGS_URL,
+    resp = http.request(
+        session, "POST", LISTINGS_URL,
         data={
             "per_page": PER_PAGE,
             "page": page,
@@ -55,9 +60,7 @@ def _post(session: requests.Session, page: int) -> dict:
             "order": "DESC",
             "search_keywords": "",
         },
-        timeout=config.HTTP_TIMEOUT_SECONDS,
     )
-    resp.raise_for_status()
     return resp.json()
 
 
@@ -83,6 +86,25 @@ def _company_from_heading(h3) -> str:
     return parts[-1] if len(parts) > 1 else ""
 
 
+#: Longest native id; matches slugify's default so existing ids are unchanged.
+_ID_MAX = 60
+
+
+def _native_id(slug_source: str) -> str:
+    """The URL slug, kept unique when it is too long to store whole.
+
+    Plain truncation gave two postings whose slugs share their first 60
+    characters the same id, and the second silently overwrote the first.
+    A slug that fits is used as-is, so ids already in the database keep
+    matching; a longer one keeps a prefix plus a hash of the whole slug.
+    """
+    full = slugify(slug_source, max_length=10_000)
+    if len(full) <= _ID_MAX:
+        return full
+    digest = hashlib.sha1(full.encode()).hexdigest()[:8]
+    return f"{full[:_ID_MAX - 9].rstrip('-')}-{digest}"
+
+
 def _parse_rows(html: str) -> list[ListingRow]:
     soup = BeautifulSoup(html, "html.parser")
     rows: list[ListingRow] = []
@@ -99,7 +121,7 @@ def _parse_rows(html: str) -> list[ListingRow]:
             # The listing markup carries no id, so the URL slug is the key.
             # It is unique per posting and is the only identifier available
             # without fetching every detail page.
-            native_id=slugify(url.rstrip("/").split("/")[-1] or title),
+            native_id=_native_id(url.rstrip("/").split("/")[-1] or title),
             title=title,
             detail_url=url,
             company=_company_from_heading(h3),
@@ -118,6 +140,11 @@ def fetch_listing() -> list[ListingRow]:
     page = 1
     while page <= MAX_PAGES:
         payload = _post(session, page)
+        if not isinstance(payload, dict) or "found_jobs" not in payload:
+            # Not the shape this parser knows; an empty board still sends
+            # the key, set to false.
+            raise ListingParseError(
+                "Research Park listing response has no found_jobs field")
         if not payload.get("found_jobs"):
             break
         rows.extend(_parse_rows(payload.get("html", "")))
@@ -147,8 +174,7 @@ def _html_to_text(html: str) -> str:
 def fetch_detail(row: ListingRow) -> Detail:
     session = requests.Session()
     session.headers.update(config.DEFAULT_HEADERS)
-    resp = session.get(row.detail_url, timeout=config.HTTP_TIMEOUT_SECONDS)
-    resp.raise_for_status()
+    resp = http.request(session, "GET", row.detail_url)
     soup = BeautifulSoup(resp.text, "html.parser")
 
     posting = _json_ld_posting(soup)
@@ -194,4 +220,7 @@ SOURCE = Source(
     fetch_listing=fetch_listing,
     supports_detail=True,
     fetch_detail=fetch_detail,
+    # An empty board is a JSON payload with found_jobs false, which cannot
+    # be mistaken for a page we failed to read.
+    empty_is_reliable=True,
 )

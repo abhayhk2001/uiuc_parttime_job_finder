@@ -160,6 +160,18 @@ class JobsTableModel(QAbstractTableModel):
         return job_cell_data(self._rows[row], col_idx, role, self._palette)
 
 
+def _job_id_sort_key(job_id: str) -> str:
+    """Make numeric ids sort as numbers: "vjb:99" before "vjb:100".
+
+    Compared as plain text, "vjb:100" sorted first. Digits are zero-padded
+    so the key stays a string -- Qt compares it like any other.
+    """
+    prefix, _, native = job_id.rpartition(":")
+    if native.isdigit():
+        native = native.zfill(12)
+    return f"{prefix}:{native}".lower()
+
+
 def job_cell_data(row_dict: dict, col_idx: int, role: int, palette):
     """Render one cell of one job row.
 
@@ -187,6 +199,8 @@ def job_cell_data(row_dict: dict, col_idx: int, role: int, palette):
             return match_count
         if col.key == "reviewed":
             return 1 if reviewed else 0
+        if col.key == "job_id":
+            return _job_id_sort_key(row_dict.get("job_id") or "")
         value = row_dict.get(col.key) or ""
         return value.lower() if isinstance(value, str) else value
 

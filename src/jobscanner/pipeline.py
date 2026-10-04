@@ -98,6 +98,7 @@ def _scan_source(
 
     # Decide which rows still need their detail text.
     need_detail = [r.job_id(source.key) for r in new_rows]
+    new_ids = set(need_detail)
     if fetch_missing:
         missing = set(db.get_jobs_missing_details(path)) & set(by_id)
         need_detail = list({*need_detail, *missing})
@@ -134,17 +135,21 @@ def _scan_source(
             print(f"   {job_id}: matches={matches}")
         db.update_details(job_id, description, requirements, skills,
                           matches, path)
-        if matches:
+        # Only announce postings this scan discovered. Rows backfilled
+        # through fetch_missing were already on the board; alerting on them
+        # every time their text arrived said "NEW" about old jobs.
+        if matches and job_id in new_ids:
             match_jobs.append({**full, "matched_keywords": ",".join(matches)})
 
     result.matching = len(match_jobs)
 
-    # Archiving is the one step that can destroy user state, so it needs
-    # two things to be true: the fetch succeeded (we are past the except
-    # above), and it actually returned rows. A parser that breaks without
-    # raising returns [] -- the Library source does exactly that when it
-    # cannot read a page -- and archiving on that would wipe the source.
-    if rows:
+    # Archiving needs two things to be true: the fetch succeeded (we are
+    # past the except above), and the listing is trustworthy. A non-empty
+    # one is. An empty one is only for a source that raises on pages it
+    # cannot read (`empty_is_reliable`); for the rest, [] may be a parser
+    # that broke silently, and archiving on it would sweep the source.
+    # Without this, a board that genuinely emptied kept its old rows forever.
+    if rows or source.empty_is_reliable:
         result.archived = db.auto_archive_removed_jobs(
             scan_started_at, source.key, path)
         if result.archived:
@@ -152,28 +157,32 @@ def _scan_source(
                   f"job(s) no longer listed.")
     else:
         print(f"[scan] {source.label}: listing came back empty; skipping "
-              f"auto-archive rather than risk archiving the whole source.")
+              f"auto-archive -- this source cannot tell an empty board from "
+              f"a page it failed to read.")
     return result, match_jobs
 
 
 def refetch_details(source_key: str, verbose: bool = False,
-                    path: Optional[Path] = None) -> int:
+                    path: Optional[Path] = None,
+                    keywords_path: Optional[Path] = None) -> int:
     """Re-fetch detail text for every stored row of one source.
 
     `get_jobs_missing_details()` only finds rows with *no* text, so a parser
     improvement that changes what we extract from a page that we already
     scraped would never reach the existing rows. This forces it.
 
-    Returns the number of rows updated.
+    Returns the number of rows updated, or -1 when `source_key` is unknown
+    or has no detail pages (the CLI turns that into a non-zero exit).
     """
     source = SOURCES_BY_KEY.get(source_key)
     if source is None:
         print(f"[refetch] unknown source {source_key!r}; known: "
               f"{', '.join(SOURCES_BY_KEY)}", file=sys.stderr)
-        return 0
+        return -1
     if not source.supports_detail or source.fetch_detail is None:
-        print(f"[refetch] {source.label} has no detail pages to re-fetch.")
-        return 0
+        print(f"[refetch] {source.label} has no detail pages to re-fetch.",
+              file=sys.stderr)
+        return -1
 
     path = Path(path) if path else config.DB_PATH
     db.init_db(path)
@@ -182,7 +191,7 @@ def refetch_details(source_key: str, verbose: bool = False,
         print(f"[refetch] Backed up DB to {backup.name}")
         db.prune_old_backups(path)
 
-    keywords = matching.load_keywords()
+    keywords = matching.load_keywords(keywords_path)
     rows = [r for r in db.get_all_jobs(path)
             if (r.get("source") or "") == source_key]
     print(f"[refetch] {source.label}: {len(rows)} stored row(s).")
@@ -223,7 +232,8 @@ def refetch_details(source_key: str, verbose: bool = False,
 
 
 def run(dry_run: bool = False, verbose: bool = False,
-        fetch_missing: bool = True, path: Optional[Path] = None) -> int:
+        fetch_missing: bool = True, path: Optional[Path] = None,
+        keywords_path: Optional[Path] = None) -> int:
     # `path` lets a caller (notably the GUI, which is constructed with its
     # own db_path) scan into a specific database instead of whichever one
     # config happens to point at.
@@ -241,8 +251,10 @@ def run(dry_run: bool = False, verbose: bool = False,
         else:
             print("[init] No prior DB to back up (first run).")
 
-    keywords = matching.load_keywords()
-    print(f"[init] Loaded {len(keywords)} keywords from {config.KEYWORDS_PATH}")
+    # Like `path`: the GUI scans with the keyword file its editor writes.
+    keywords_path = Path(keywords_path) if keywords_path else config.KEYWORDS_PATH
+    keywords = matching.load_keywords(keywords_path)
+    print(f"[init] Loaded {len(keywords)} keywords from {keywords_path}")
 
     # The New/Old cutoff is this timestamp, but it is only recorded once
     # the scan has reached at least one source (below). Writing it up front

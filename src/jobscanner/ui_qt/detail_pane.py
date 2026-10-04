@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from jobscanner.timeutils import relative_days
+from jobscanner.timeutils import local_date_str, relative_days
 from jobscanner.ui_qt import job_actions as ja
 from jobscanner.ui_qt import theme
 from jobscanner.ui_qt.flow_layout import FlowLayout
@@ -201,6 +201,9 @@ class DetailPane(QWidget):
 
     def clear(self) -> None:
         self.job_id = None
+        # Forget the last job, or a theme change would re-render its body
+        # into the cleared pane.
+        self._last_job = None
         self._primary_op = None
         self._secondary_op = None
         self.title_label.setText("(select a job)")
@@ -241,8 +244,11 @@ class DetailPane(QWidget):
         self.url_label.setStyleSheet(f"color: {p['link']};")
         self.meta_label.setStyleSheet(f"color: {p['muted']};")
         # Re-render chips with the same keyword string, since their
-        # stylesheet is built from the palette.
+        # stylesheet is built from the palette. Drop the cache key first:
+        # with the same keywords _render_chips would otherwise skip the
+        # rebuild and keep the old colours.
         last = getattr(self, "_last_keywords", "")
+        self._chips_key = None
         self._render_chips(last)
         # The body HTML embeds colors too -- re-render with the same job.
         last_job = getattr(self, "_last_job", None)
@@ -258,13 +264,13 @@ class DetailPane(QWidget):
             lines.append(f"Company: {company}")
         applied = (job.get("applied_at") or "").strip()
         if applied:
-            lines.append(f"Applied: {applied[:10]}")
+            lines.append(f"Applied: {local_date_str(applied)}")
         follow = (job.get("follow_up_at") or "").strip()
         if follow:
             lines.append(
-                f"Follow up: {follow[:10]}  ({relative_days(follow)})")
+                f"Follow up: {local_date_str(follow)}  ({relative_days(follow)})")
         if job.get("archived") and (job.get("archived_at") or "").strip():
-            lines.append(f"Archived: {job['archived_at'][:10]}")
+            lines.append(f"Archived: {local_date_str(job['archived_at'])}")
         return lines
 
     def _render_actions(self, primary: ja.ActionSpec,
@@ -310,7 +316,7 @@ class DetailPane(QWidget):
 
     def _render_follow_up(self, state: ja.JobState, follow_up_at: str) -> None:
         if state.applied and not state.archived:
-            pretty = follow_up_at[:10] if follow_up_at else "\u2014"
+            pretty = local_date_str(follow_up_at) or "\u2014"
             self.follow_up_btn.setText(
                 f"\u270e  Edit follow-up date ({pretty})")
             self.follow_up_btn.show()

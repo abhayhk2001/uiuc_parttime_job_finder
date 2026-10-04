@@ -42,6 +42,8 @@ from jobscanner.ui_qt.settings import app_settings
 #: Where collapsed sections are remembered between launches.
 _COLLAPSED_KEY = "table/collapsed_sources"
 
+_MATCHES_COLUMN = next(i for i, c in enumerate(COLUMNS) if c.key == "matches")
+
 
 class JobsTableView(QTreeView):
     """The right-hand table widget. Owns model, proxy, selection."""
@@ -81,13 +83,12 @@ class JobsTableView(QTreeView):
         hh.setHighlightSections(False)
         hh.setStretchLastSection(True)
         hh.setSectionsMovable(False)
-        # 'matches' starts descending-first (the user wants the most
-        # promising rows at the top), matching the old behaviour.
         for col_idx, col in enumerate(COLUMNS):
             self.setColumnWidth(col_idx, col.width)
-            if col.numeric:
-                self._proxy.sort(col_idx, Qt.DescendingOrder if col.key == "matches" else Qt.AscendingOrder)
-                break
+        # Open with the most-matching jobs first. Explicit rather than via
+        # apply_default_sort: setSortingEnabled() above has already sorted
+        # by column 0, which that method would keep as a user's choice.
+        self.sortByColumn(_MATCHES_COLUMN, Qt.DescendingOrder)
 
         self.expanded.connect(self._remember_expansion)
         self.collapsed.connect(self._remember_expansion)
@@ -219,6 +220,24 @@ class JobsTableView(QTreeView):
                 return True
         return False
 
+    def apply_default_sort(self, keep_db_order: bool) -> None:
+        """Pick the sort a section opens with.
+
+        Most sections open with the most-matching jobs first. A section
+        whose database order means something (Applied: most overdue
+        follow-up first; Archived: most recently archived) opens in that
+        order instead -- the Matches sort used to override it. A column the
+        user picked is kept when moving between ordinary sections.
+
+        Goes through ``sortByColumn`` so the header's sort indicator always
+        shows the sort actually applied; sorting the proxy directly left the
+        indicator on a different column.
+        """
+        if keep_db_order:
+            self.sortByColumn(-1, Qt.AscendingOrder)
+        elif self._proxy.sortColumn() < 0:
+            self.sortByColumn(_MATCHES_COLUMN, Qt.DescendingOrder)
+
     def set_search_text(self, text: str) -> None:
         self._proxy.set_search_text(text)
 
@@ -259,6 +278,10 @@ class JobsTableView(QTreeView):
 
     def _on_shape_changed(self, *_args) -> None:
         self._span_group_rows()
+        # A section that a filter hid and then let back in returns as a new
+        # row, collapsed -- and the next expand/collapse would have saved it
+        # that way. Re-apply the remembered state.
+        self._restore_expansion()
         self._sync_empty_state()
 
     def _sync_empty_state(self, *_args) -> None:

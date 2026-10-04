@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QSizePolicy,
     QSplitter,
@@ -143,6 +144,12 @@ class JobScannerApp(QMainWindow):
 
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
+        # Totals live in a permanent widget on the right. As a status
+        # message they were rewritten on every refresh, which wiped
+        # "Scan complete." and every bulk-action toast the instant it
+        # appeared; showMessage() is now only for those transient notes.
+        self._stats_label = QLabel("", self.status_bar)
+        self.status_bar.addPermanentWidget(self._stats_label)
         self.status_bar.showMessage("Ready.")
 
         # Wire the actions.
@@ -157,6 +164,8 @@ class JobScannerApp(QMainWindow):
         self._search_edit.textChanged.connect(self._on_filter_changed)
         self._matches_only.toggled.connect(self._on_filter_changed)
         self._table.selectionJobIdChanged.connect(self._on_table_selection)
+        self._table.contextMenuRequested.connect(self._show_job_menu)
+        self._table.activated.connect(self._on_row_activated)
 
         # Sidebar signals.
         self.sidebar.sectionSelected.connect(self.select_section)
@@ -252,9 +261,9 @@ class JobScannerApp(QMainWindow):
         try:
             stats = db.get_stats(self.db_path)
         except Exception:  # noqa: BLE001
-            self.status_bar.showMessage("Ready.")
+            self._stats_label.setText("")
             return
-        self.status_bar.showMessage(
+        self._stats_label.setText(
             f"{stats['total']} jobs · {stats['matching']} matching · "
             f"{stats['reviewed']} reviewed"
         )
@@ -274,6 +283,8 @@ class JobScannerApp(QMainWindow):
             return
         self._section = section
         self.sidebar.set_current_section(section)
+        self._table.apply_default_sort(
+            keep_db_order=db.SECTIONS_BY_KEY[section].has_own_order)
         self.refresh()
 
     # -- bulk actions ----------------------------------------------------
@@ -341,6 +352,10 @@ class JobScannerApp(QMainWindow):
 
     def _open_preferences(self) -> None:
         PreferencesDialog(self).exec()
+        # The dialog swaps the app palette, but rows, chips and the sidebar
+        # build their colours themselves -- repaint them as an OS theme
+        # change would.
+        self._on_color_scheme_changed(None)
 
     # -- detail pane actions -------------------------------------------
 
@@ -368,7 +383,7 @@ class JobScannerApp(QMainWindow):
         if not job.get("applied_at") or job.get("archived"):
             return
         FollowUpDialog(
-            self, job_id, (job.get("follow_up_at") or "")[:10],
+            self, job_id, job.get("follow_up_at") or "",
             on_save=self.refresh, db_path=self.db_path,
         ).exec()
 
@@ -377,7 +392,6 @@ class JobScannerApp(QMainWindow):
     def _on_table_selection(self, job_id) -> None:
         if job_id is None:
             self.detail.clear()
-            self.status_bar.showMessage("Ready.", 0)
             return
         # The view already exposes the full row dict via its model role,
         # so no DB round-trip is needed to populate the pane.
@@ -390,7 +404,34 @@ class JobScannerApp(QMainWindow):
                 self.detail.show_job(job)
             else:
                 self.detail.clear()
-        self.status_bar.showMessage(f"Selected job #{job_id}", 0)
+
+    def _on_row_activated(self, _index) -> None:
+        """Return or double-click on a job opens it in the browser. On a
+        section heading there is no job, and double-click already toggles
+        the section."""
+        if self._table.selected_id():
+            self._open_selected_in_browser()
+
+    def _show_job_menu(self, job_id: str, global_pos) -> None:
+        """Right-click menu for one job. The view has already made it the
+        current row, so the detail pane -- and every handler here that
+        reads it -- is on this job."""
+        job = self._table.current_job_dict() or db.get_job(job_id, self.db_path) or {}
+        state = ja.JobState.from_row(job)
+        menu = QMenu(self)
+        for spec in (ja.primary_action(state), ja.secondary_action(state)):
+            if not spec.label:
+                continue
+            act = menu.addAction(spec.label)
+            act.setEnabled(spec.enabled and bool(spec.op))
+            act.triggered.connect(lambda _checked=False, op=spec.op: self._run_job_op(op))
+        if state.applied and not state.archived:
+            menu.addAction("Edit Follow-up Date\u2026", self._open_follow_up_editor)
+        menu.addSeparator()
+        menu.addAction(self.actions.open_in_browser)
+        menu.addAction(self.actions.copy_job_id)
+        menu.addAction(self.actions.copy_url)
+        menu.popup(global_pos)
 
     def _on_filter_changed(self, *_args) -> None:
         """Search text or matches-only changed: reapply both filters and
@@ -464,7 +505,8 @@ class JobScannerApp(QMainWindow):
 
         self._scan_thread = QThread(self)
         self._scan_worker = ScanWorker(dry_run=False, fetch_missing=True,
-                                       db_path=self.db_path)
+                                       db_path=self.db_path,
+                                       keywords_path=self.keywords_path)
         self._scan_worker.moveToThread(self._scan_thread)
         self._scan_thread.started.connect(self._scan_worker.run)
         self._scan_worker.textWritten.connect(self.log_dock.append)

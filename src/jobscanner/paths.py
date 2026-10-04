@@ -11,6 +11,14 @@ Resolution rules:
   itself would break the moment the OS quarantines or replaces the
   app, and writing there is forbidden for signed/notarized apps.
 
+- Installed as a regular (non-editable) package: also the per-user
+  directory. There is no repo to sit next to -- ``parents[2]`` of this
+  file is then ``<venv>/lib/python3.X``, where the database used to land.
+
+- ``$JOBSCANNER_DATA_DIR``, when set, overrides all of the above. It is
+  how a cron scan run from source shares one database with the .app
+  instead of quietly keeping a second one.
+
 The first-run case for the frozen app also seeds ``keywords.json`` from
 the bundled default so the user has a working keyword list to edit
 without having to find the bundled copy.
@@ -32,9 +40,19 @@ _REPO_DATA_DIR = _REPO_ROOT / "data"
 _REPO_KEYWORDS = _REPO_ROOT / "keywords.json"
 
 
+#: Environment variable that pins the data directory.
+DATA_DIR_ENV = "JOBSCANNER_DATA_DIR"
+
+
 def user_data_dir() -> Path:
     """Return (and create) the per-user writable data directory."""
-    d = _frozen_data_dir() if _is_frozen() else _REPO_DATA_DIR
+    override = os.environ.get(DATA_DIR_ENV)
+    if override:
+        d = Path(override).expanduser()
+    elif _uses_app_data_dir():
+        d = app_data_dir()
+    else:
+        d = _REPO_DATA_DIR
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -70,19 +88,34 @@ def _is_frozen() -> bool:
     return getattr(sys, "frozen", False)
 
 
+def _is_source_checkout() -> bool:
+    """True when this file sits in the repo, not in site-packages."""
+    return (_REPO_ROOT / "pyproject.toml").exists()
+
+
+def _uses_app_data_dir() -> bool:
+    return _is_frozen() or not _is_source_checkout()
+
+
 def _keywords_root() -> Path:
     """Directory that holds the editable keywords.json.
 
     - Source run: the repo root (alongside pyproject.toml).
-    - Frozen run: the user data dir (created on demand).
+    - Frozen, installed, or ``$JOBSCANNER_DATA_DIR`` set: the data dir,
+      so the keywords travel with the database they were matched into.
     """
-    if _is_frozen():
+    if os.environ.get(DATA_DIR_ENV) or _uses_app_data_dir():
         return user_data_dir()
     return _REPO_ROOT
 
 
-def _frozen_data_dir() -> Path:
-    """Platform-specific user data dir when frozen."""
+def app_data_dir() -> Path:
+    """The platform's per-user data dir -- where the .app keeps its files.
+
+    Public because ``jobscanner import`` and scripts/migrate-to-appdata.py
+    copy *into* it while running from source, where user_data_dir() would
+    answer with the repo's own data/ directory.
+    """
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / APP_DISPLAY_NAME
     if sys.platform == "win32":

@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from jobscanner import config
+from jobscanner.scraper import http
 
 
 class VJBError(Exception):
@@ -20,21 +21,13 @@ class VJBSession:
         self._eventvalidation: Optional[str] = None
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        last_exc: Optional[Exception] = None
-        for attempt in range(1, config.MAX_RETRIES + 1):
-            try:
-                resp = self.session.request(
-                    method, url, timeout=config.HTTP_TIMEOUT_SECONDS, **kwargs
-                )
-                if resp.status_code >= 500:
-                    raise VJBError(f"Server error {resp.status_code}")
-                resp.raise_for_status()
-                time.sleep(config.REQUEST_DELAY_SECONDS)
-                return resp
-            except (requests.RequestException, VJBError) as exc:
-                last_exc = exc
-                time.sleep(config.REQUEST_DELAY_SECONDS * attempt)
-        raise VJBError(f"Failed after {config.MAX_RETRIES} retries: {last_exc}")
+        try:
+            resp = http.request(self.session, method, url, **kwargs)
+        except requests.RequestException as exc:
+            raise VJBError(f"{method} {url} failed: {exc}") from exc
+        # Be polite to the board between consecutive requests.
+        time.sleep(config.REQUEST_DELAY_SECONDS)
+        return resp
 
     def _refresh_viewstate(self, html: str) -> None:
         soup = BeautifulSoup(html, "html.parser")

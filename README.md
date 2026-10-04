@@ -240,11 +240,12 @@ After every successful `python main.py` scan, the app runs `db.auto_archive_remo
 
 ### How the New ↔ Old boundary moves
 
-A successful scan sets `meta.latest_scan_started_at` at the moment it begins. Every row inserted by that scan has `first_seen_at >= that timestamp` and so lives in **New**. After the next scan, those rows pre-date the new cutoff and silently move to **Old**. Nothing else triggers a transition.
+A scan records the moment it began in `meta.latest_scan_started_at`, but only once it has reached at least one board. Every row inserted by that scan has `first_seen_at >= that timestamp` and so lives in **New**. After the next scan, those rows pre-date the new cutoff and silently move to **Old**. Nothing else triggers a transition.
 
 This means:
 - `--dry-run` does not advance the cutoff (no DB writes).
-- A job that disappears from the listing between scans simply falls to Old (search/All still finds it).
+- A scan that cannot reach any board (no network) leaves New exactly as it was, and reports failure.
+- A job that disappears from its board is auto-archived. If a later scan lists it again, it is restored to wherever it was, including Applied. Jobs you archive yourself stay archived.
 - Before the very first scan, every unreviewed row is treated as New; the first scan normalizes that.
 
 ## Cron example
@@ -256,6 +257,7 @@ This means:
 Notes:
 - `-u` makes stdout unbuffered so lines show up in `scanner.log` in real time instead of after the scan finishes.
 - `--no-gui` is belt-and-suspenders: the CLI also auto-detects a non-TTY stdout and skips the GUI on its own.
+- If you also use the `.app`, prefix the command with `JOBSCANNER_DATA_DIR="$HOME/Library/Application Support/UIUC Part-Time Job Scanner"` so cron and the app share one database (see "Moving existing data into the bundled app").
 
 ## Files
 
@@ -470,12 +472,27 @@ python scripts/migrate-to-appdata.py --apply
 jobscanner import path/to/source/data --apply
 ```
 
-Both back up any pre-existing destination file before overwriting and
-refuse to clobber a newer destination unless `--force` is passed.
+Both are dry runs until you pass `--apply`. They keep anything they
+replace as `<name>.pre-import-<timestamp>`, and refuse to replace a
+destination database that already holds jobs unless `--force` is passed.
+An empty one, which is what launching the `.app` once creates, is
+replaced without asking.
+
+Afterwards, scans you run from source (`python main.py`, cron) still
+write to `<repo>/data/`. To keep a single database, point them at the
+app's directory:
+
+```bash
+JOBSCANNER_DATA_DIR="$HOME/Library/Application Support/UIUC Part-Time Job Scanner" \
+  python main.py --no-gui
+```
+
+`JOBSCANNER_DATA_DIR` overrides the data directory, including where
+`keywords.json` is read, for any way of running the scanner.
 
 ## Notes
 
 - Site is ASP.NET WebForms (server-rendered). No headless browser needed.
 - `scraper/session.py` uses a polite 1 s delay between requests — see `config.REQUEST_DELAY_SECONDS`.
 - The bot is structured so a future WhatsApp alerter can replace `alerts.py`'s `alert()` body without touching the rest of the code.
-- Matching is intentionally simple (case-insensitive whole-word-ish substring), so a keyword like `python` matches both `Python Developer` and `pythonic-style work`. Tighten keywords to reduce false positives if needed.
+- Matching is intentionally simple: each keyword is a case-insensitive whole-word match. `python` matches `Python Developer` but not `pythonic`, and keywords that begin or end with a symbol (`C++`, `C#`, `.NET`) work. Overlapping keywords (`data` and `data science`) are each reported.

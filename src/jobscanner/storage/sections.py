@@ -89,6 +89,12 @@ class Section:
     #: Whether this section appears as a counted bucket in the sidebar.
     counted: bool = True
 
+    @property
+    def has_own_order(self) -> bool:
+        """True when the SQL order carries meaning a column sort would lose
+        (Applied: most overdue follow-up first)."""
+        return self.order_by != _ORDER_BY_DEFAULT
+
 
 SECTIONS: tuple[Section, ...] = (
     Section(SECTION_NEW, "New", _new_clause),

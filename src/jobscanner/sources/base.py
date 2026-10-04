@@ -57,6 +57,14 @@ class Detail:
     skills: str = ""
 
 
+class ListingParseError(Exception):
+    """The page arrived but did not look like the board's listing.
+
+    Raised instead of returning ``[]`` so that a markup change reads as a
+    failed fetch -- which archives nothing -- rather than as an empty board.
+    """
+
+
 @dataclass(frozen=True)
 class Source:
     """One job board.
@@ -72,3 +80,8 @@ class Source:
     fetch_listing: Callable[[], list[ListingRow]]
     supports_detail: bool = False
     fetch_detail: Optional[Callable[[ListingRow], Detail]] = None
+    #: True when ``fetch_listing`` returns ``[]`` only for a board that
+    #: positively says it has no openings (and raises on anything it cannot
+    #: read). Only then does an empty listing archive the source's old
+    #: rows; otherwise it is treated as a possible silent parser failure.
+    empty_is_reliable: bool = False

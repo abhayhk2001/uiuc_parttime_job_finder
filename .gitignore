@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.build-venv/
 
 # Local data — DB is regenerated on first scan; do not commit user state
 data/*.db
