@@ -7,7 +7,8 @@ the listing. Each entry can jump straight to the job in the right section.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -60,6 +61,7 @@ class FollowUpAlertsDialog(QDialog):
         for job in jobs:
             item = QListWidgetItem(self._item_text(job))
             item.setData(Qt.UserRole, job.get("job_id"))
+            item.setData(Qt.UserRole + 1, job.get("detail_url") or "")
             item.setToolTip(job.get("detail_url") or "")
             self._list.addItem(item)
         self._list.itemDoubleClicked.connect(lambda _item: self._go())
@@ -67,6 +69,9 @@ class FollowUpAlertsDialog(QDialog):
 
         bar = QHBoxLayout()
         bar.addStretch(1)
+        self._open_btn = QPushButton("Open in Browser", self)
+        self._open_btn.clicked.connect(self._open_in_browser)
+        bar.addWidget(self._open_btn)
         self._go_btn = QPushButton("Go to job", self)
         self._go_btn.setDefault(True)
         self._go_btn.clicked.connect(self._go)
@@ -104,3 +109,11 @@ class FollowUpAlertsDialog(QDialog):
             return
         self.jumpRequested.emit(item.data(Qt.UserRole))
         self.accept()
+
+    def _open_in_browser(self) -> None:
+        item = self._list.currentItem()
+        if item is None:
+            return
+        url = (item.data(Qt.UserRole + 1) or "").strip()
+        if url.startswith(("http://", "https://")):
+            QDesktopServices.openUrl(QUrl(url))

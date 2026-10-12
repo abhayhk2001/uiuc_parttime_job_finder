@@ -132,6 +132,8 @@ class JobScannerApp(QMainWindow):
         search_layout.addWidget(self._search_edit, 1)
         self._matches_only = QCheckBox("Matches only", search_row)
         search_layout.addWidget(self._matches_only)
+        self._shown_label = QLabel("", search_row)
+        search_layout.addWidget(self._shown_label)
         outer.addWidget(search_row)
 
         self.splitter = QSplitter(Qt.Horizontal, self)
@@ -182,12 +184,14 @@ class JobScannerApp(QMainWindow):
         self.sidebar.sectionSelected.connect(self.select_section)
         self.sidebar.bulkActionInvoked.connect(self.bulk_mark_section)
         self.sidebar.editKeywordsRequested.connect(self._open_keyword_editor)
+        self.sidebar.keywordClicked.connect(self._filter_by_keyword)
 
         # Detail pane signals.
         self.detail.actionInvoked.connect(self._run_job_op)
         self.detail.editFollowUpRequested.connect(self._open_follow_up_editor)
         self.detail.markNotAppliedRequested.connect(
             self._mark_selected_not_applied)
+        self.detail.keywordClicked.connect(self._filter_by_keyword)
 
         # Re-fetch row colors when the OS flips light/dark.
         QGuiApplication.styleHints().colorSchemeChanged.connect(
@@ -278,6 +282,7 @@ class JobScannerApp(QMainWindow):
             counts = {}
         self._refresh_status(counts)
         self._on_table_selection(self._table.selected_id())
+        self._update_shown_count()
 
         sections_with_counts = [(k, label, counts.get(k, 0))
                                 for k, label, _ in build_sections_list()]
@@ -555,6 +560,20 @@ class JobScannerApp(QMainWindow):
         self._table.set_search_text(self._search_edit.text())
         self._table.set_matches_only(self._matches_only.isChecked())
         self._table.set_empty_message(self._empty_message())
+        self._update_shown_count()
+
+    def _update_shown_count(self) -> None:
+        """Keep the search-row counter in step with what's visible."""
+        n = self._table.visible_job_count()
+        p = theme.current_palette()
+        self._shown_label.setStyleSheet(f"color: {p['muted']};")
+        self._shown_label.setText(f"{n} shown")
+
+    def _filter_by_keyword(self, keyword: str) -> None:
+        """A keyword chip was clicked: filter the table by that keyword."""
+        self._search_edit.setText(keyword)
+        self._search_edit.setFocus()
+        self._search_edit.selectAll()
 
     def _open_selected_in_browser(self) -> None:
         job = self._table.current_job_dict()

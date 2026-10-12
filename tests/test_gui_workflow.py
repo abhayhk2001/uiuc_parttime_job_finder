@@ -445,7 +445,26 @@ def test_follow_up_alerts_dialog_builds() -> None:
         eq(dialog._list.count(), len(jobs), "one list entry per alert")
         check("follow up" in dialog._item_text(jobs[0]).lower(),
               "entry text mentions the follow-up")
+        eq(dialog._open_btn.text(), "Open in Browser",
+           "the dialog offers Open in Browser")
         dialog.close()
+
+
+def test_sidebar_keywords_filter_the_table() -> None:
+    """Clicking a keyword in the sidebar filters the table by it."""
+    from jobscanner.ui_qt.sidebar import _ClickableKeyword
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        labels = app.sidebar._keywords._list_holder.findChildren(
+            _ClickableKeyword)
+        check(labels, "the sidebar lists the loaded keywords")
+        first = labels[0]
+        first.clicked.emit()
+        pump_events()
+        eq(app._search_edit.text(), first.text(),
+           "clicking a sidebar keyword fills the search box")
 
 
 def test_job_actions_confirm_with_a_status_toast() -> None:

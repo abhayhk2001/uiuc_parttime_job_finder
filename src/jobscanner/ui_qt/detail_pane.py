@@ -82,17 +82,22 @@ def _build_body_html(job: dict, palette) -> str:
     return "".join(parts)
 
 
-class _Chip(QLabel):
-    """A small rounded chip for a matched keyword."""
+class _Chip(QToolButton):
+    """A small rounded chip for a matched keyword. Clicking one filters
+    the table by that keyword."""
 
     def __init__(self, text: str, parent=None) -> None:
-        super().__init__(text, parent)
+        super().__init__(parent)
         p = theme.current_palette()
+        self.setText(text)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"Filter by \u201c{text}\u201d")
         self.setStyleSheet(
-            f"background-color: {p['chip_bg']}; color: {p['chip_text']}; "
-            f"border-radius: 10px; padding: 2px 10px;"
+            f"QToolButton {{ background-color: {p['chip_bg']}; "
+            f"color: {p['chip_text']}; border-radius: 10px; "
+            f"padding: 2px 10px; border: none; }} "
+            f"QToolButton:hover {{ background-color: {p['accent_hover']}; }}"
         )
-        self.setMargin(2)
 
 
 class DetailPane(QWidget):
@@ -101,6 +106,7 @@ class DetailPane(QWidget):
     actionInvoked = Signal(object)       # the ActionSpec.op string (or None)
     editFollowUpRequested = Signal()
     markNotAppliedRequested = Signal()
+    keywordClicked = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -411,6 +417,8 @@ class DetailPane(QWidget):
             return
         for kw in keywords:
             chip = _Chip(kw, self.chips_flow)
+            chip.clicked.connect(
+                lambda _checked=False, k=kw: self.keywordClicked.emit(k))
             self.chips_layout.addWidget(chip)
 
     def _on_anchor_clicked(self, url: QUrl) -> None:

@@ -23,27 +23,67 @@ def test_chip_widgets_are_reused_across_selections() -> None:
     each refresh; with Qt's smaller rebuild cost it's less visible but the
     behaviour is preserved -- same row stays selected and chips don't churn
     when the keyword string hasn't changed."""
+    from PySide6.QtWidgets import QToolButton
+
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
         pump_events()
         app._table.select_id("T0")
         pump_events()
-        before_ids = [id(w) for w in app.detail.chips_flow.findChildren(QLabel)]
+        before_ids = [id(w) for w in app.detail.chips_flow.findChildren(QToolButton)]
 
         # Same keywords (T0 is to_apply, no flip yet)
         app._run_job_op(ja.OP_ADD_TO_APPLY)
         pump_events()
         # After refresh the selection persists, so the chips should be
         # identical objects.
-        after_ids = [id(w) for w in app.detail.chips_flow.findChildren(QLabel)]
+        after_ids = [id(w) for w in app.detail.chips_flow.findChildren(QToolButton)]
         eq(before_ids, after_ids,
            "chips are reused across same-keyword refreshes")
 
         # Different keywords -- the chips_frame rebuilds.
-        app._table.select_id("T1")  # T1 has matched_keywords="python"
+        app._table.select_id("T1")  # T1 has no matched keywords
         pump_events()
-        check(0 < len(app.detail.chips_flow.findChildren(QLabel)),
-              "chips rebuild for a row with different keywords")
+        eq(len(app.detail.chips_flow.findChildren(QToolButton)), 0,
+           "chips clear for a row without matched keywords")
+
+
+def test_keyword_chips_filter_the_table() -> None:
+    """Clicking a matched-keyword chip drops that keyword into the search
+    box -- chips work as filters, not just as decorations."""
+    from PySide6.QtWidgets import QToolButton
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T2")  # matched_keywords="python"
+        pump_events()
+        chips = app.detail.chips_flow.findChildren(QToolButton)
+        check(chips, "the row has at least one chip")
+        chip = next(c for c in chips if c.text() == "python")
+        chip.click()
+        pump_events()
+        eq(app._search_edit.text(), "python",
+           "clicking the chip fills the search box")
+        eq(app._table.visible_job_count(), 3,
+           "the table filters down to the matching rows")
+
+
+def test_shown_counter_tracks_filters() -> None:
+    """The search row should say how many jobs the table is showing."""
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        eq(app._shown_label.text(), "6 shown",
+           "counter reports the full section")
+        app._search_edit.setText("Job 3")
+        pump_events()
+        eq(app._shown_label.text(), "1 shown",
+           "counter tracks the search filter")
+        app._search_edit.clear()
+        pump_events()
+        eq(app._shown_label.text(), "6 shown",
+           "counter restores when the search clears")
 
 
 def test_open_button_tracks_whether_there_is_a_url() -> None:

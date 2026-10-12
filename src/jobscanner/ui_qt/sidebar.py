@@ -211,9 +211,14 @@ class BulkActionBar(QWidget):
 
 
 class KeywordPanel(QWidget):
-    """A small scrollable list of loaded keywords + Edit Keywords button."""
+    """A small scrollable list of loaded keywords + Edit Keywords button.
+
+    Clicking a keyword filters the table by it -- the sidebar doubles as a
+    quick "show me everything matching this" launcher.
+    """
 
     editRequested = Signal()
+    keywordClicked = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -257,9 +262,29 @@ class KeywordPanel(QWidget):
             self._list_layout.insertWidget(0, empty)
             return
         for i, kw in enumerate(keywords):
-            label = QLabel(kw, self._list_holder)
+            label = _ClickableKeyword(kw, self._list_holder)
             label.setWordWrap(False)
+            label.clicked.connect(
+                lambda _=False, k=kw: self.keywordClicked.emit(k))
             self._list_layout.insertWidget(i, label)
+
+
+class _ClickableKeyword(QLabel):
+    """A keyword label that emits ``clicked`` when the mouse presses it."""
+
+    clicked = Signal()
+
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"Filter by \u201c{text}\u201d")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +298,7 @@ class SidebarDock(QDockWidget):
     sectionSelected = Signal(str)
     bulkActionInvoked = Signal(str)
     editKeywordsRequested = Signal()
+    keywordClicked = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__("Sidebar", parent)
@@ -308,6 +334,7 @@ class SidebarDock(QDockWidget):
         self._sections.sectionSelected.connect(self.sectionSelected)
         self._bulk.actionInvoked.connect(self.bulkActionInvoked)
         self._keywords.editRequested.connect(self.editKeywordsRequested)
+        self._keywords.keywordClicked.connect(self.keywordClicked)
 
     # -- public API ---------------------------------------------------
 
