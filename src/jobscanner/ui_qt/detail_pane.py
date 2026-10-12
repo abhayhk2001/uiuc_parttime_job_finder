@@ -93,6 +93,7 @@ class DetailPane(QWidget):
 
     actionInvoked = Signal(object)       # the ActionSpec.op string (or None)
     editFollowUpRequested = Signal()
+    markNotAppliedRequested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -167,6 +168,11 @@ class DetailPane(QWidget):
         self.follow_up_btn.clicked.connect(self.editFollowUpRequested)
         layout.addWidget(self.follow_up_btn)
 
+        self.not_applied_btn = QPushButton("", inner)
+        self.not_applied_btn.setMinimumHeight(28)
+        self.not_applied_btn.clicked.connect(self.markNotAppliedRequested)
+        layout.addWidget(self.not_applied_btn)
+
         # Matched keyword chips header.
         chips_header = QLabel("Matched keywords", inner)
         chips_header.setStyleSheet(
@@ -214,6 +220,7 @@ class DetailPane(QWidget):
         self._render_actions(ja.primary_action(ja.JobState()),
                              ja.secondary_action(ja.JobState()))
         self.follow_up_btn.hide()
+        self.not_applied_btn.hide()
         self._render_chips("")
         self.body.setHtml(_build_body_html({}, theme.current_palette()))
 
@@ -235,6 +242,7 @@ class DetailPane(QWidget):
         state = ja.JobState.from_row(job)
         self._render_actions(ja.primary_action(state), ja.secondary_action(state))
         self._render_follow_up(state, job.get("follow_up_at") or "")
+        self._render_not_applied(state)
         self._render_chips(job.get("matched_keywords") or "")
         self.body.setHtml(_build_body_html(job, theme.current_palette()))
 
@@ -315,13 +323,22 @@ class DetailPane(QWidget):
         btn.setStyleSheet(css)
 
     def _render_follow_up(self, state: ja.JobState, follow_up_at: str) -> None:
-        if state.applied and not state.archived:
+        # Offered for any applied job, including one the scanner archived
+        # because it left the listing: the user may still chase it.
+        if state.applied:
             pretty = local_date_str(follow_up_at) or "\u2014"
             self.follow_up_btn.setText(
                 f"\u270e  Edit follow-up date ({pretty})")
             self.follow_up_btn.show()
         else:
             self.follow_up_btn.hide()
+
+    def _render_not_applied(self, state: ja.JobState) -> None:
+        if state.applied:
+            self.not_applied_btn.setText("\u21a9 Mark Not Applied")
+            self.not_applied_btn.show()
+        else:
+            self.not_applied_btn.hide()
 
     def _render_chips(self, matched_keywords: str) -> None:
         # Keep a copy so palette refreshes can rebuild chips.

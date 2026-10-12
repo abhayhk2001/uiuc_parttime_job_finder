@@ -144,6 +144,34 @@ def get_all_jobs(path: Optional[Path] = None) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def get_follow_up_alerts(path: Optional[Path] = None) -> list[dict]:
+    """Jobs that need follow-up attention, shown first when the app opens.
+
+    Two kinds qualify:
+
+    - Active applied jobs whose ``follow_up_at`` is due or overdue.
+    - Applied jobs the scanner auto-archived (they left their board's
+      listing) — the user may still want to chase them even though they
+      are no longer open to apply to.
+
+    Manually archived jobs are deliberately left out: the user filed those
+    away on purpose, and surfacing them again would read as noise.
+    """
+    with connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(
+            "SELECT * FROM jobs "
+            "WHERE applied_at IS NOT NULL AND applied_at != '' "
+            "AND ("
+            "   (archived = 0 AND follow_up_at IS NOT NULL AND follow_up_at <= ?)"
+            "   OR (archived = 1 AND auto_archived = 1)"
+            ") "
+            "ORDER BY follow_up_at ASC, first_seen_at DESC",
+            (now_iso(),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 # ---------------------------------------------------------------------------
 # Single-row state transitions
 # ---------------------------------------------------------------------------
@@ -251,6 +279,24 @@ def archive_job(
             "UPDATE jobs SET archived = 1, archived_at = ?, auto_archived = 0 "
             "WHERE job_id = ?",
             (now_iso(), job_id),
+        )
+        conn.commit()
+
+
+def mark_not_applied(
+    job_id: str,
+    path: Optional[Path] = None,
+) -> None:
+    """Revert an applied job to Reviewed.
+
+    Clears ``applied_at`` and ``follow_up_at``; ``reviewed`` stays 1 and
+    ``to_apply`` stays 0, so the row lands back in the Reviewed section.
+    """
+    with connect(path) as conn:
+        conn.execute(
+            "UPDATE jobs SET applied_at = NULL, follow_up_at = NULL "
+            "WHERE job_id = ?",
+            (job_id,),
         )
         conn.commit()
 

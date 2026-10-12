@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QCoreApplication, QSettings, Qt, QThread
+from PySide6.QtCore import QCoreApplication, QSettings, Qt, QThread, QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
@@ -50,6 +50,7 @@ from jobscanner.ui_qt import job_actions as ja
 from jobscanner.ui_qt import theme
 from jobscanner.ui_qt.detail_pane import DetailPane
 from jobscanner.ui_qt.dialogs.follow_up import FollowUpDialog
+from jobscanner.ui_qt.dialogs.follow_up_alerts import FollowUpAlertsDialog
 from jobscanner.ui_qt.dialogs.keywords import KeywordsDialog
 from jobscanner.ui_qt.dialogs.preferences import PreferencesDialog
 from jobscanner.ui_qt.jobs_table import JobsTableView
@@ -175,6 +176,8 @@ class JobScannerApp(QMainWindow):
         # Detail pane signals.
         self.detail.actionInvoked.connect(self._run_job_op)
         self.detail.editFollowUpRequested.connect(self._open_follow_up_editor)
+        self.detail.markNotAppliedRequested.connect(
+            self._mark_selected_not_applied)
 
         # Re-fetch row colors when the OS flips light/dark.
         QGuiApplication.styleHints().colorSchemeChanged.connect(
@@ -200,6 +203,10 @@ class JobScannerApp(QMainWindow):
 
         self.refresh()
 
+        # Surface follow-ups and (optionally) start a scan once the window
+        # is actually on screen.
+        QTimer.singleShot(0, self._on_startup)
+
     # -- actions wiring -------------------------------------------------
 
     def _wire_actions(self) -> None:
@@ -215,6 +222,10 @@ class JobScannerApp(QMainWindow):
         a.run_scan.triggered.connect(self._start_scan)
         a.refresh.triggered.connect(self.refresh)
         a.about.triggered.connect(self._show_about)
+        # `setChecked` does not emit toggled, so restore the persisted state
+        # first, then listen for the user flipping it.
+        a.scan_on_open.setChecked(self._scan_on_open_enabled())
+        a.scan_on_open.toggled.connect(self._on_scan_on_open_toggled)
 
     # -- refresh ---------------------------------------------------------
 
@@ -357,6 +368,48 @@ class JobScannerApp(QMainWindow):
         # change would.
         self._on_color_scheme_changed(None)
 
+    # -- startup ---------------------------------------------------------
+
+    def _on_startup(self) -> None:
+        self._maybe_show_follow_up_alerts()
+        self._maybe_scan_on_startup()
+
+    def _maybe_show_follow_up_alerts(self) -> None:
+        try:
+            jobs = db.get_follow_up_alerts(self.db_path)
+        except Exception:  # noqa: BLE001
+            return
+        if not jobs:
+            return
+        dialog = FollowUpAlertsDialog(self, jobs)
+        dialog.jumpRequested.connect(self._jump_to_job)
+        dialog.exec()
+
+    def _jump_to_job(self, job_id: str) -> None:
+        try:
+            job = db.get_job(job_id, self.db_path)
+        except Exception:  # noqa: BLE001
+            return
+        if job is None:
+            return
+        section = (db.SECTION_ARCHIVED if job.get("archived")
+                   else db.SECTION_FOLLOW_UP)
+        self.select_section(section)
+        self._table.select_id(job_id)
+
+    # -- scan-on-open setting -------------------------------------------
+
+    @staticmethod
+    def _scan_on_open_enabled() -> bool:
+        return app_settings().value("scan/run_on_open", False, type=bool)
+
+    def _on_scan_on_open_toggled(self, checked: bool) -> None:
+        app_settings().setValue("scan/run_on_open", bool(checked))
+
+    def _maybe_scan_on_startup(self) -> None:
+        if self._scan_on_open_enabled():
+            self._start_scan()
+
     # -- detail pane actions -------------------------------------------
 
     def _run_job_op(self, op) -> None:
@@ -365,12 +418,28 @@ class JobScannerApp(QMainWindow):
         job_id = self.detail.job_id
         if not job_id:
             return
+        # Remember where the row sat among the visible jobs so that, if the
+        # action moves it out of this section, focus advances to the job
+        # that now occupies the same slot instead of clearing to nothing.
+        before = self._table.visible_job_ids()
+        try:
+            position = before.index(job_id)
+        except ValueError:
+            position = 0
         try:
             ja.apply_op(op, job_id, self.db_path)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Update failed", str(exc))
             return
         self.refresh()
+        if job_id not in self._table.visible_job_ids():
+            self._table.select_visible_index(position)
+
+    def _mark_selected_not_applied(self) -> None:
+        job_id = self.detail.job_id
+        if not job_id:
+            return
+        self._run_job_op(ja.OP_MARK_NOT_APPLIED)
 
     def _open_follow_up_editor(self) -> None:
         job_id = self.detail.job_id
@@ -380,7 +449,9 @@ class JobScannerApp(QMainWindow):
             job = db.get_job(job_id, self.db_path) or {}
         except Exception:  # noqa: BLE001
             return
-        if not job.get("applied_at") or job.get("archived"):
+        # Any applied job may be followed up on, including one the scanner
+        # archived because it left the listing.
+        if not job.get("applied_at"):
             return
         FollowUpDialog(
             self, job_id, job.get("follow_up_at") or "",
@@ -425,8 +496,11 @@ class JobScannerApp(QMainWindow):
             act = menu.addAction(spec.label)
             act.setEnabled(spec.enabled and bool(spec.op))
             act.triggered.connect(lambda _checked=False, op=spec.op: self._run_job_op(op))
-        if state.applied and not state.archived:
+        if state.applied:
             menu.addAction("Edit Follow-up Date\u2026", self._open_follow_up_editor)
+            act = menu.addAction("Mark Not Applied")
+            act.triggered.connect(
+                lambda _checked=False: self._run_job_op(ja.OP_MARK_NOT_APPLIED))
         menu.addSeparator()
         menu.addAction(self.actions.open_in_browser)
         menu.addAction(self.actions.copy_job_id)

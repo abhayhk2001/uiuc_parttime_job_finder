@@ -51,6 +51,9 @@ class Actions:
     run_scan: QAction
     refresh: QAction
 
+    # Settings
+    scan_on_open: QAction
+
     # Help
     about: QAction
 
@@ -104,6 +107,12 @@ def build_actions(owner: QMainWindow) -> Actions:
     refresh.setShortcut(QKeySequence(sequence("R")))
     refresh.setStatusTip("Reload the current section from the database")
 
+    # Settings ------------------------------------------------------------
+    scan_on_open = QAction("Run &scan on open", owner)
+    scan_on_open.setCheckable(True)
+    scan_on_open.setStatusTip(
+        "Start a scan automatically every time the app opens")
+
     # Help ----------------------------------------------------------------
     about = QAction("&About", owner)
     about.setMenuRole(QAction.AboutRole)
@@ -119,6 +128,7 @@ def build_actions(owner: QMainWindow) -> Actions:
         copy_url=copy_url,
         run_scan=run_scan,
         refresh=refresh,
+        scan_on_open=scan_on_open,
         about=about,
     )
 
@@ -154,12 +164,16 @@ def build_menus(owner: QMainWindow, a: Actions) -> dict[str, object]:
     m_scan.addAction(a.run_scan)
     m_scan.addAction(a.refresh)
 
+    m_settings = bar.addMenu("&Settings")
+    m_settings.addAction(a.scan_on_open)
+
     m_help = bar.addMenu("&Help")
     m_help.addAction(a.about)
 
     return {
         "file": m_file, "edit": m_edit, "view": m_view,
-        "job": m_job, "scan": m_scan, "help": m_help,
+        "job": m_job, "scan": m_scan, "settings": m_settings,
+        "help": m_help,
     }
 
 

@@ -32,6 +32,7 @@ OP_UNARCHIVE = "unarchive"
 OP_ADD_TO_APPLY = "add_to_apply"
 OP_REMOVE_TO_APPLY = "remove_to_apply"
 OP_ARCHIVE = "archive"
+OP_MARK_NOT_APPLIED = "mark_not_applied"
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,10 @@ def primary_action(state: JobState) -> ActionSpec:
         return ActionSpec("\u2713 Mark Applied", OP_MARK_APPLIED, "success")
     if state.reviewed:
         return ActionSpec("\u21bb Revisit", OP_REVISIT, "warning")
-    return ActionSpec("\u2713 Mark Reviewed", OP_MARK_REVIEWED, "accent")
+    # An unreviewed job's most common next step is "this looks good, put it
+    # in To Apply", so that is the prominent action; Mark Reviewed is the
+    # side-step and sits in the secondary slot.
+    return ActionSpec(_ADD_TO_APPLY_LABEL, OP_ADD_TO_APPLY, "accent")
 
 
 def secondary_action(state: JobState) -> ActionSpec:
@@ -96,7 +100,7 @@ def secondary_action(state: JobState) -> ActionSpec:
     if state.reviewed:
         # A reviewed job can't be re-added to To Apply; Revisit it first.
         return ActionSpec(_ADD_TO_APPLY_LABEL, None, enabled=False)
-    return ActionSpec(_ADD_TO_APPLY_LABEL, OP_ADD_TO_APPLY)
+    return ActionSpec("\u2713 Mark Reviewed", OP_MARK_REVIEWED)
 
 
 def apply_op(op: Optional[str], job_id: str, path: Path) -> bool:
@@ -119,6 +123,8 @@ def apply_op(op: Optional[str], job_id: str, path: Path) -> bool:
         db.set_to_apply(job_id, False, path)
     elif op == OP_ARCHIVE:
         db.archive_job(job_id, path)
+    elif op == OP_MARK_NOT_APPLIED:
+        db.mark_not_applied(job_id, path)
     else:
         raise ValueError(f"Unknown job operation: {op!r}")
     return True

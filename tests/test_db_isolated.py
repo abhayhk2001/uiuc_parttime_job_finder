@@ -591,6 +591,61 @@ def test_set_follow_up_overrides_default() -> None:
             "explicit set_follow_up should override default")
 
 
+def test_get_follow_up_alerts_includes_due_and_auto_archived() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("AL1", "AL2", "AL3", "AL4"):
+            db.upsert_listing(_listing(jid, jid), p)
+
+        # AL1: applied with a follow-up in the past -> due, alerts.
+        db.mark_applied("AL1", p)
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET follow_up_at = '2020-01-01T00:00:00+00:00' "
+                "WHERE job_id = 'AL1'")
+            conn.commit()
+
+        # AL2: applied with a far-future follow-up -> not yet due.
+        db.mark_applied("AL2", p)
+        db.set_follow_up("AL2", "2099-12-31T00:00:00+00:00", p)
+
+        # AL3: applied then auto-archived (left the listing) -> alerts.
+        db.mark_applied("AL3", p)
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET archived = 1, auto_archived = 1, "
+                "archived_at = '2026-01-01T00:00:00+00:00' "
+                "WHERE job_id = 'AL3'")
+            conn.commit()
+
+        # AL4: applied then *manually* archived -> deliberately filed away.
+        db.mark_applied("AL4", p)
+        db.archive_job("AL4", p)
+
+        ids = sorted(r["job_id"] for r in db.get_follow_up_alerts(p))
+        _eq(ids, ["AL1", "AL3"],
+            "only due follow-ups and auto-archived applied jobs alert")
+
+
+def test_mark_not_applied_returns_job_to_reviewed() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(_listing("NA1", "NA"), p)
+        db.mark_applied("NA1", p)
+        _check(bool(db.get_job("NA1", p)["applied_at"]),
+               "job is applied before the revert")
+        db.mark_not_applied("NA1", p)
+        row = db.get_job("NA1", p)
+        _eq(row["applied_at"], None, "applied_at cleared")
+        _eq(row["follow_up_at"], None, "follow_up_at cleared")
+        _eq(row["reviewed"], 1, "reviewed stays 1")
+        _eq(row["to_apply"], 0, "to_apply stays 0")
+        _eq(db.get_section_counts(p)["follow_up"], 0,
+            "no longer in Applied")
+        _eq(db.get_section_counts(p)["reviewed"], 1,
+            "lands back in Reviewed")
+
+
 
 # ---------------------------------------------------------------------------
 # Reversible auto-archive, scan cutoff, listing vs detail fields

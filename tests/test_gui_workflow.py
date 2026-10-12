@@ -76,9 +76,11 @@ def test_state_machine_walk() -> None:
         app._table.select_id("T0")
         pump_events()
 
-        check(app.detail.primary_btn.text().endswith("Mark Reviewed"),
-              "an untouched row offers Mark Reviewed")
-        app._run_job_op(app.detail._secondary_op)   # Add to To Apply
+        check(app.detail.primary_btn.text().endswith("Add to To Apply"),
+              "an untouched row offers Add to To Apply as the main action")
+        check(app.detail.secondary_btn.text().endswith("Mark Reviewed"),
+              "Mark Reviewed is the secondary action on an untouched row")
+        app._run_job_op(app.detail._primary_op)     # Add to To Apply
         pump_events()
         check(bool(db.get_job("T0", path)["to_apply"]),
               "row moved to To Apply")
@@ -342,6 +344,108 @@ def test_layout_is_persisted() -> None:
     with gui_app() as (app, _path, _kw):
         eq(app.splitter.sizes(), saved,
            "splitter sizes round-trip through QSettings")
+
+
+def test_scan_on_open_toggle_persists() -> None:
+    """The Settings → Run scan on open check persists through QSettings."""
+    with gui_app() as (app, _path, _kw):
+        eq(app.actions.scan_on_open.isChecked(), False,
+           "scan-on-open defaults to off")
+        # trigger() toggles the checkable action, which emits `toggled`.
+        app.actions.scan_on_open.trigger()
+        pump_events()
+        eq(app._scan_on_open_enabled(), True, "toggle persisted on")
+        app.actions.scan_on_open.trigger()
+        pump_events()
+        eq(app._scan_on_open_enabled(), False, "toggle persisted off")
+
+
+def test_action_removing_row_advances_selection() -> None:
+    """After an action moves the current job out of the section, focus lands
+    on the next listing without a click."""
+    with gui_app() as (app, path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        ids = app._table.visible_job_ids()
+        eq(len(ids), 6, "all seeded rows start in New")
+        first = ids[0]
+        app._table.select_id(first)
+        pump_events()
+        eq(app._table.selected_id(), first, "first row selected")
+        # Primary on an unreviewed row is now "Add to To Apply", which moves
+        # it out of New.
+        app._run_job_op(app.detail._primary_op)
+        pump_events()
+        check(bool(db.get_job(first, path)["to_apply"]), "row left New")
+        check(app._table.selected_id() is not None,
+              "a row is still selected after the action")
+        check(app._table.selected_id() != first,
+              "selection advanced past the removed row")
+
+
+def test_mark_not_applied_reverts_job() -> None:
+    """Applied rows offer Mark Not Applied, which reverts them to Reviewed."""
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T2", path)
+        app.select_section(db.SECTION_FOLLOW_UP)
+        pump_events()
+        app._table.select_id("T2")
+        pump_events()
+        check(app.detail.not_applied_btn.isVisible(),
+              "applied rows offer Mark Not Applied")
+        app._mark_selected_not_applied()
+        pump_events()
+        row = db.get_job("T2", path)
+        eq(row["applied_at"], None, "applied_at cleared")
+        eq(db.get_section_counts(path)["follow_up"], 0, "leaves Applied")
+
+
+def test_applied_context_menu_offers_mark_not_applied() -> None:
+    from PySide6.QtWidgets import QMenu
+
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T2", path)
+        app._show_job_menu("T2", app.mapToGlobal(app.rect().center()))
+        pump_events()
+        menus = [m for m in app.findChildren(QMenu) if m.isVisible()]
+        labels = [a.text() for a in menus[-1].actions() if a.text()]
+        check("Mark Not Applied" in labels,
+              f"menu offers Mark Not Applied ({labels})")
+        check(any("Edit Follow-up Date" in t for t in labels),
+              "menu offers the follow-up editor for an applied row")
+        menus[-1].close()
+
+
+def test_archived_applied_job_still_offers_follow_up() -> None:
+    """A job the user applied to but that left the listing (archived) can
+    still be followed up on."""
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T3", path)
+        db.archive_job("T3", path)
+        app.select_section(db.SECTION_ARCHIVED)
+        pump_events()
+        app._table.select_id("T3")
+        pump_events()
+        check(app.detail.follow_up_btn.isVisible(),
+              "archived applied rows still offer the follow-up editor")
+        check(app.detail.not_applied_btn.isVisible(),
+              "and Mark Not Applied")
+
+
+def test_follow_up_alerts_dialog_builds() -> None:
+    from jobscanner.ui_qt.dialogs.follow_up_alerts import FollowUpAlertsDialog
+
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T4", path)
+        db.set_follow_up("T4", "2020-01-01T00:00:00+00:00", path)
+        jobs = db.get_follow_up_alerts(path)
+        check(jobs, "the overdue row is picked up by the alert query")
+        dialog = FollowUpAlertsDialog(app, jobs)
+        pump_events()
+        eq(dialog._list.count(), len(jobs), "one list entry per alert")
+        check("follow up" in dialog._item_text(jobs[0]).lower(),
+              "entry text mentions the follow-up")
+        dialog.close()
 
 
 if __name__ == "__main__":

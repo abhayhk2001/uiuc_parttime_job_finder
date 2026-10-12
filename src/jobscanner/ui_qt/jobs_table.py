@@ -220,6 +220,21 @@ class JobsTableView(QTreeView):
                 return True
         return False
 
+    def select_visible_index(self, index: int) -> bool:
+        """Select the job at flattened position ``index`` among the visible
+        rows (group headings skipped). Out-of-range indexes clamp to the last
+        job. Returns True when a row was selected.
+
+        Used after an action removes the current row from its section: focus
+        lands on the job that now occupies the same slot, so the user never
+        has to click to keep moving down the list.
+        """
+        jobs = self.visible_job_ids()
+        if not jobs:
+            return False
+        target = max(0, min(index, len(jobs) - 1))
+        return self.select_id(jobs[target])
+
     def apply_default_sort(self, keep_db_order: bool) -> None:
         """Pick the sort a section opens with.
 
