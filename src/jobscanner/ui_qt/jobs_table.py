@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QModelIndex, QPoint, QSettings, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSettings, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -68,7 +68,9 @@ class JobsTableView(QTreeView):
         self.setModel(self._proxy)
 
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        # ExtendedSelection lets the user lasso several jobs (Ctrl/Shift or
+        # drag) and act on all of them at once via the context menu.
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setAlternatingRowColors(False)
         self.setSortingEnabled(True)
@@ -191,6 +193,22 @@ class JobsTableView(QTreeView):
         job_id = self._proxy.data(idx, JobRoles.JobIdRole)
         return job_id or None
 
+    def selected_job_ids(self) -> list[str]:
+        """Job ids of every selected row, in display order, headings skipped.
+
+        With multi-select, ``selected_id()`` (the current row) alone is not
+        enough: callers that act on the selection need the whole set.
+        """
+        from jobscanner.ui_qt.models import JobRoles as _JR
+
+        selected: set[str] = set()
+        for idx in self.selectionModel().selectedIndexes():
+            if idx.column() == 0 and idx.parent().isValid():
+                job_id = self._proxy.data(idx, _JR.JobIdRole)
+                if job_id:
+                    selected.add(job_id)
+        return [jid for jid in self.visible_job_ids() if jid in selected]
+
     def current_job_dict(self) -> Optional[dict]:
         idx = self.selectionModel().currentIndex()
         if not idx.isValid():
@@ -216,6 +234,11 @@ class JobsTableView(QTreeView):
                     return False
                 self.expand(proxy_idx.parent())
                 self.setCurrentIndex(proxy_idx)
+                # With ExtendedSelection, setCurrentIndex alone doesn't
+                # update the selection range -- do it explicitly so
+                # programmatic selection and mouse selection agree.
+                self.selectionModel().select(
+                    proxy_idx, QItemSelectionModel.ClearAndSelect)
                 self.scrollTo(proxy_idx, QAbstractItemView.PositionAtCenter)
                 return True
         return False
@@ -268,6 +291,24 @@ class JobsTableView(QTreeView):
 
     # -- internals -------------------------------------------------------
 
+    def selectionCommand(self, index: QModelIndex,
+                         event) -> QItemSelectionModel.SelectionFlags:
+        """A Ctrl/Shift-click on a section heading must not select it.
+
+        Headings are not jobs; letting a range-selection sweep one in would
+        only confuse the multi-select menu, which counts jobs.
+        """
+        if index.isValid() and not index.parent().isValid():
+            modifiers = Qt.KeyboardModifiers()
+            if event is not None:
+                try:
+                    modifiers = event.modifiers()
+                except AttributeError:
+                    pass
+            if modifiers & (Qt.ControlModifier | Qt.ShiftModifier):
+                return QItemSelectionModel.NoUpdate
+        return super().selectionCommand(index, event)
+
     def _on_current_row_changed(self, current, _previous) -> None:
         if not current.isValid():
             self.selectionJobIdChanged.emit(None)
@@ -285,7 +326,13 @@ class JobsTableView(QTreeView):
         idx = self.indexAt(pos)
         if not idx.isValid():
             return
-        self.setCurrentIndex(idx)
+        # Right-clicking inside the current selection keeps it (so the menu
+        # can act on every selected row); anywhere else selects just the
+        # clicked row first.
+        if not self.selectionModel().isSelected(idx):
+            self.setCurrentIndex(idx)
+            self.selectionModel().select(
+                idx, QItemSelectionModel.ClearAndSelect)
         job_id = self.selected_id()
         if job_id:
             global_pos = self.viewport().mapToGlobal(pos)

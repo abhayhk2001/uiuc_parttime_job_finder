@@ -46,6 +46,8 @@ class Actions:
     open_in_browser: QAction
     copy_job_id: QAction
     copy_url: QAction
+    job_primary: QAction
+    job_secondary: QAction
 
     # Scan
     run_scan: QAction
@@ -96,6 +98,16 @@ def build_actions(owner: QMainWindow) -> Actions:
 
     copy_url = QAction("Copy &URL", owner)
 
+    # Triage from the keyboard: run the detail pane's two action buttons
+    # without reaching for the mouse.
+    job_primary = QAction("Run &Primary Job Action", owner)
+    job_primary.setShortcut(QKeySequence(sequence("E")))
+    job_primary.setStatusTip("Apply the main action to the selected job")
+
+    job_secondary = QAction("Run &Secondary Job Action", owner)
+    job_secondary.setShortcut(QKeySequence(sequence("Shift+E")))
+    job_secondary.setStatusTip("Apply the side action to the selected job")
+
     # Scan ----------------------------------------------------------------
     run_scan = QAction("&Run Scan", owner)
     # Cmd+Return, not a bare Return: Return alone fired a network scan
@@ -126,6 +138,8 @@ def build_actions(owner: QMainWindow) -> Actions:
         open_in_browser=open_in_browser,
         copy_job_id=copy_job_id,
         copy_url=copy_url,
+        job_primary=job_primary,
+        job_secondary=job_secondary,
         run_scan=run_scan,
         refresh=refresh,
         scan_on_open=scan_on_open,
@@ -156,6 +170,9 @@ def build_menus(owner: QMainWindow, a: Actions) -> dict[str, object]:
 
     m_job = bar.addMenu("&Job")
     m_job.addAction(a.open_in_browser)
+    m_job.addSeparator()
+    m_job.addAction(a.job_primary)
+    m_job.addAction(a.job_secondary)
     m_job.addSeparator()
     m_job.addAction(a.copy_job_id)
     m_job.addAction(a.copy_url)

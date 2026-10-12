@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QSizePolicy,
     QSplitter,
     QStatusBar,
@@ -131,6 +132,8 @@ class JobScannerApp(QMainWindow):
         search_layout.addWidget(self._search_edit, 1)
         self._matches_only = QCheckBox("Matches only", search_row)
         search_layout.addWidget(self._matches_only)
+        self._shown_label = QLabel("", search_row)
+        search_layout.addWidget(self._shown_label)
         outer.addWidget(search_row)
 
         self.splitter = QSplitter(Qt.Horizontal, self)
@@ -145,6 +148,15 @@ class JobScannerApp(QMainWindow):
 
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
+        # An indeterminate bar that shows only while a scan runs. Text
+        # alone ("Scanning…") left users wondering whether the app had
+        # hung on a slow board.
+        self._scan_progress = QProgressBar(self.status_bar)
+        self._scan_progress.setRange(0, 0)
+        self._scan_progress.setFixedWidth(150)
+        self._scan_progress.setMaximumHeight(14)
+        self._scan_progress.hide()
+        self.status_bar.addWidget(self._scan_progress)
         # Totals live in a permanent widget on the right. As a status
         # message they were rewritten on every refresh, which wiped
         # "Scan complete." and every bulk-action toast the instant it
@@ -172,12 +184,14 @@ class JobScannerApp(QMainWindow):
         self.sidebar.sectionSelected.connect(self.select_section)
         self.sidebar.bulkActionInvoked.connect(self.bulk_mark_section)
         self.sidebar.editKeywordsRequested.connect(self._open_keyword_editor)
+        self.sidebar.keywordClicked.connect(self._filter_by_keyword)
 
         # Detail pane signals.
         self.detail.actionInvoked.connect(self._run_job_op)
         self.detail.editFollowUpRequested.connect(self._open_follow_up_editor)
         self.detail.markNotAppliedRequested.connect(
             self._mark_selected_not_applied)
+        self.detail.keywordClicked.connect(self._filter_by_keyword)
 
         # Re-fetch row colors when the OS flips light/dark.
         QGuiApplication.styleHints().colorSchemeChanged.connect(
@@ -191,6 +205,10 @@ class JobScannerApp(QMainWindow):
         state = settings.value("window/state")
         if state is not None:
             self.restoreState(state)
+        # A scan may have left the log dock open when the window last
+        # closed; the saved state would bring it back empty, eating a
+        # quarter of the window. It only earns its space while a scan runs.
+        self.log_dock.hide()
         splitter_sizes = settings.value("window/splitter_sizes")
         if splitter_sizes is not None:
             try:
@@ -200,6 +218,8 @@ class JobScannerApp(QMainWindow):
 
         # Cmd-1 .. Cmd-9 jump between sections (the old UI's behavior).
         self._install_section_shortcuts()
+        # Esc clears the search box, as the README has always promised.
+        self._install_clear_search_shortcut()
 
         self.refresh()
 
@@ -219,6 +239,8 @@ class JobScannerApp(QMainWindow):
         a.open_in_browser.triggered.connect(self._open_selected_in_browser)
         a.copy_job_id.triggered.connect(self._copy_selected_job_id)
         a.copy_url.triggered.connect(self._copy_selected_url)
+        a.job_primary.triggered.connect(self._run_primary_job_action)
+        a.job_secondary.triggered.connect(self._run_secondary_job_action)
         a.run_scan.triggered.connect(self._start_scan)
         a.refresh.triggered.connect(self.refresh)
         a.about.triggered.connect(self._show_about)
@@ -252,14 +274,16 @@ class JobScannerApp(QMainWindow):
         self._table.set_rows(rows)
         if prev_selected:
             self._table.select_id(prev_selected)
-        self._refresh_status()
-        self._on_table_selection(self._table.selected_id())
 
         # Refresh sidebar section counts.
         try:
             counts = db.get_section_counts(self.db_path)
         except Exception:  # noqa: BLE001
             counts = {}
+        self._refresh_status(counts)
+        self._on_table_selection(self._table.selected_id())
+        self._update_shown_count()
+
         sections_with_counts = [(k, label, counts.get(k, 0))
                                 for k, label, _ in build_sections_list()]
         self.sidebar.refresh_sections(sections_with_counts, counts, self._section)
@@ -268,15 +292,18 @@ class JobScannerApp(QMainWindow):
         except Exception:  # noqa: BLE001
             self.sidebar.set_keywords([])
 
-    def _refresh_status(self) -> None:
+    def _refresh_status(self, counts: dict | None = None) -> None:
         try:
             stats = db.get_stats(self.db_path)
         except Exception:  # noqa: BLE001
             self._stats_label.setText("")
             return
+        counts = counts or {}
+        label = db.SECTION_LABELS.get(self._section, self._section)
+        current = counts.get(self._section, 0)
         self._stats_label.setText(
-            f"{stats['total']} jobs · {stats['matching']} matching · "
-            f"{stats['reviewed']} reviewed"
+            f"{label}: {current} · {stats['total']} jobs · "
+            f"{stats['matching']} matching · {stats['reviewed']} reviewed"
         )
 
     def _empty_message(self) -> str:
@@ -431,6 +458,15 @@ class JobScannerApp(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Update failed", str(exc))
             return
+        # The row is about to leave this section (or change color in
+        # place); confirm the action with a toast naming the job.
+        acted_on = self._table.current_job_dict()
+        if not acted_on or acted_on.get("job_id") != job_id:
+            try:
+                acted_on = db.get_job(job_id, self.db_path)
+            except Exception:  # noqa: BLE001
+                acted_on = {}
+        self.status_bar.showMessage(ja.describe_op(op, acted_on), 4000)
         self.refresh()
         if job_id not in self._table.visible_job_ids():
             self._table.select_visible_index(position)
@@ -460,7 +496,18 @@ class JobScannerApp(QMainWindow):
 
     # -- table selection handlers --------------------------------------
 
+    def _run_primary_job_action(self) -> None:
+        self._run_job_op(self.detail.primary_op())
+
+    def _run_secondary_job_action(self) -> None:
+        self._run_job_op(self.detail.secondary_op())
+
     def _on_table_selection(self, job_id) -> None:
+        # The triage shortcuts need a job to act on; keep them in sync
+        # with the selection.
+        has_job = job_id is not None
+        self.actions.job_primary.setEnabled(has_job)
+        self.actions.job_secondary.setEnabled(has_job)
         if job_id is None:
             self.detail.clear()
             return
@@ -484,9 +531,14 @@ class JobScannerApp(QMainWindow):
             self._open_selected_in_browser()
 
     def _show_job_menu(self, job_id: str, global_pos) -> None:
-        """Right-click menu for one job. The view has already made it the
-        current row, so the detail pane -- and every handler here that
-        reads it -- is on this job."""
+        """Right-click menu for one job -- or for every selected job.
+
+        With several rows selected the menu offers each supported op with
+        a count of how many rows it would touch."""
+        selected = self._table.selected_job_ids()
+        if len(selected) > 1:
+            self._show_multi_job_menu(selected, global_pos)
+            return
         job = self._table.current_job_dict() or db.get_job(job_id, self.db_path) or {}
         state = ja.JobState.from_row(job)
         menu = QMenu(self)
@@ -507,12 +559,69 @@ class JobScannerApp(QMainWindow):
         menu.addAction(self.actions.copy_url)
         menu.popup(global_pos)
 
+    def _show_multi_job_menu(self, job_ids: list[str], global_pos) -> None:
+        """Menu of bulk triage ops for the selected rows."""
+        rows = []
+        for job_id in job_ids:
+            try:
+                row = db.get_job(job_id, self.db_path)
+            except Exception:  # noqa: BLE001
+                row = None
+            if row:
+                rows.append(row)
+        if not rows:
+            return
+        menu = QMenu(self)
+        menu.addAction(f"{len(rows)} jobs selected").setEnabled(False)
+        menu.addSeparator()
+        for op, label in ja.MULTI_OP_LABELS:
+            count = sum(1 for r in rows if op in ja.ops_for_job(r))
+            act = menu.addAction(f"{label} ({count})")
+            act.setEnabled(count > 0)
+            act.triggered.connect(
+                lambda _checked=False, o=op: self._run_op_on_selection(o))
+        menu.popup(global_pos)
+
+    def _run_op_on_selection(self, op: str) -> None:
+        """Apply ``op`` to every selected row and toast a summary."""
+        job_ids = self._table.selected_job_ids()
+        if not job_ids:
+            return
+        succeeded = failed = 0
+        for job_id in job_ids:
+            try:
+                if ja.apply_op(op, job_id, self.db_path):
+                    succeeded += 1
+                else:
+                    failed += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+        self.refresh()
+        message = f"{ja.op_past_tense(op)} {succeeded} job(s)"
+        if failed:
+            message += f" ({failed} skipped)"
+        self.status_bar.showMessage(message, 5000)
+
     def _on_filter_changed(self, *_args) -> None:
         """Search text or matches-only changed: reapply both filters and
         update the empty-state message to explain why nothing is visible."""
         self._table.set_search_text(self._search_edit.text())
         self._table.set_matches_only(self._matches_only.isChecked())
         self._table.set_empty_message(self._empty_message())
+        self._update_shown_count()
+
+    def _update_shown_count(self) -> None:
+        """Keep the search-row counter in step with what's visible."""
+        n = self._table.visible_job_count()
+        p = theme.current_palette()
+        self._shown_label.setStyleSheet(f"color: {p['muted']};")
+        self._shown_label.setText(f"{n} shown")
+
+    def _filter_by_keyword(self, keyword: str) -> None:
+        """A keyword chip was clicked: filter the table by that keyword."""
+        self._search_edit.setText(keyword)
+        self._search_edit.setFocus()
+        self._search_edit.selectAll()
 
     def _open_selected_in_browser(self) -> None:
         job = self._table.current_job_dict()
@@ -566,10 +675,8 @@ class JobScannerApp(QMainWindow):
         if self._scanning:
             return
         self._scanning = True
-        self.actions.run_scan.setEnabled(False)
-        self.actions.run_scan.setText("Scanning\u2026")
+        self._set_scanning_ui(True)
         self.status_bar.showMessage("Scanning\u2026")
-        self.sidebar.set_bulk_enabled(False)
 
         # Show the log dock while scanning so the user sees progress.
         if not self.log_dock.isVisible():
@@ -592,9 +699,7 @@ class JobScannerApp(QMainWindow):
 
     def _on_scan_finished(self, success: bool) -> None:
         self._scanning = False
-        self.actions.run_scan.setEnabled(True)
-        self.actions.run_scan.setText("&Run Scan")
-        self.sidebar.set_bulk_enabled(True)
+        self._set_scanning_ui(False)
         if success:
             self.status_bar.showMessage("Scan complete.", 5000)
         else:
@@ -604,6 +709,14 @@ class JobScannerApp(QMainWindow):
         self._scan_thread = None
         if self._close_after_scan:
             self.close()
+
+    def _set_scanning_ui(self, started: bool) -> None:
+        """Toggle everything that tracks scan state: button, progress bar,
+        sidebar bulk block. Shared by start/finish so tests can drive it."""
+        self.actions.run_scan.setEnabled(not started)
+        self.actions.run_scan.setText("Scanning\u2026" if started else "&Run Scan")
+        self.sidebar.set_bulk_enabled(not started)
+        self._scan_progress.setVisible(started)
 
     def _on_color_scheme_changed(self, _scheme) -> None:
         self._table.refresh_palette()
@@ -617,6 +730,19 @@ class JobScannerApp(QMainWindow):
         for i, section in enumerate(db.COUNTED_SECTIONS[:9], start=1):
             QShortcut(QKeySequence(f"Ctrl+{i}"), self,
                       activated=lambda s=section: self.select_section(s))
+
+    def _install_clear_search_shortcut(self) -> None:
+        from PySide6.QtGui import QShortcut, QKeySequence
+
+        # Window-context: an open dialog consumes Esc itself, so this only
+        # fires while the main window owns the key.
+        QShortcut(QKeySequence("Esc"), self,
+                  activated=self._clear_search)
+
+    def _clear_search(self) -> None:
+        if not self._search_edit.text():
+            return
+        self._search_edit.clear()
 
     def _show_about(self) -> None:
         QMessageBox.about(

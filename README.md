@@ -109,9 +109,9 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
 | --------------------------------- | --------------------------------- | ---------------------------- |
 | Sections, bulk actions, keywords  | Rows grouped by source, sortable, filterable | Job details, action buttons  |
 
-- **Native menu bar** — `File`, `Edit`, `View`, `Job`, `Scan`, `Help`. View → Toggle Sidebar (`Cmd/Ctrl-B`) and Toggle Log Dock (`Cmd/Ctrl-L`) hide/show their respective panels. View → Appearance (`Cmd-,` if you bind it) opens a Light/Dark/Auto dialog.
-- **Dockable sidebar** — the sections list, bulk actions and keywords panel live in a single `QDockWidget` on the left. Drag the dock's title bar to float it, drag it to another edge to re-dock, click the close icon to hide it. The toolbar keeps working whether the sidebar is visible or not.
-- **Dockable log console** — scan output streams into a `QDockWidget` at the bottom, hidden by default and toggled by `Cmd/Ctrl-L` or View → Toggle Log Dock. Float it out to read while you scan again, or hide it entirely.
+- **Native menu bar** — `File`, `Edit`, `View`, `Job`, `Scan`, `Help`. View → Toggle Sidebar (`Cmd/Ctrl-B`) and Toggle Log Dock (`Cmd/Ctrl-L`) hide/show their respective panels. View → Appearance opens a Light/Dark/Auto dialog. Job → Run Primary/Secondary Job Action triage the selected job from the keyboard.
+- **Dockable sidebar** — the sections list, bulk actions and keywords panel live in a single `QDockWidget` on the left. Drag the dock's title bar to float it, drag it to another edge to re-dock, click the close icon to hide it. The toolbar keeps working whether the sidebar is visible or not. Section rows show their `Cmd/Ctrl-1…7` shortcut in a tooltip.
+- **Dockable log console** — scan output streams into a `QDockWidget` at the bottom, toggled by `Cmd/Ctrl-L` or View → Toggle Log Dock. It opens automatically while a scan runs and closes at the next launch so a stale, empty log never eats window space.
 - **Native macOS integration** — the menu bar appears in the system bar; traffic-light buttons, dock icon, and standard keyboard shortcuts (Cmd-Q, Cmd-C, Cmd-V, Cmd-W) all work without extra wiring. The default menu roles (`QuitRole`, `AboutRole`) automatically route to the right place per platform.
 - **Light / Dark / Follow OS** — the app reads `QStyleHints.colorScheme()` and follows the OS appearance live. Override the choice via `View → Appearance`; the override is stored in `QSettings`.
 - **Sections sidebar** — five blocks stacked, with live counts:
@@ -124,10 +124,11 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
   - **APPLIED** — jobs you've marked Applied (with `applied_at` and `follow_up_at` recorded). Sorted by follow-up date ascending so overdue items appear first.
   - **ARCHIVED** — jobs removed from the VJB listing since the last scan, or jobs you archived manually. Recoverable via Unarchive.
   - **BULK ACTIONS** — "Mark all New reviewed", "Mark all Old reviewed", "Revisit all Reviewed", "Mark all To Apply Applied", "Unmark all To Apply", "Mark all Applied Further", "Archive all Applied". Each button is enabled only when its section has rows. The four destructive ones (revisit all, apply all, unmark all, archive all) ask for confirmation first; every one reports its result as a status-bar toast that fades after a few seconds rather than a modal dialog.
-  - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`.
-- **Numeric section shortcuts** — `Cmd/Ctrl-1` through `Cmd/Ctrl-7` jump to the corresponding section (All, New, Old, Reviewed, To Apply, Applied, Archived).
-- **Search row** — a filter box above the table that matches case-insensitively across title, company, description, requirements, skills and matched keywords. The "Matches only" checkbox restricts the view to rows that matched at least one keyword. Both filters compose with the section sidebar.
+  - **KEYWORDS** — count of loaded keywords, an "Edit Keywords…" button, and a scrollable list of every keyword currently in `keywords.json`. Empty state shows `(none — Edit Keywords to add)`. Clicking a keyword filters the table by it.
+- **Numeric section shortcuts** — `Cmd/Ctrl-1` through `Cmd/Ctrl-7` jump to the corresponding section, in sidebar order: New, Old, Reviewed, To Apply, Applied, Archived, All. Hover a section row to see its shortcut.
+- **Search row** — a filter box above the table that matches case-insensitively across title, company, description, requirements, skills and matched keywords. The "Matches only" checkbox restricts the view to rows that matched at least one keyword. A "N shown" counter on the right reports how many rows the current section + filters leave visible. `Esc` clears the search box. All filters compose with the section sidebar.
 - **Jobs table** columns: Job ID · Title · Company · Matches (#) · Reviewed (✓). Sortable: click any column header. Right-aligned numeric columns. Right-click a row for the context menu (Open in Browser, Copy Job ID, Copy URL, the two state-machine actions). Double-click a row, or press Return, to open the posting in the default browser.
+- **Multi-select** — Ctrl/Cmd-click, Shift-click, or drag to select several rows at once, then right-click for a menu of the same triage actions with a per-op count (`Mark Reviewed (5)`); ops no selected row supports show `(0)` and are disabled. Every job action confirms itself with a status-bar toast naming the job (or the count, for multi-select).
 - **Grouped by source.** Rows sit under a collapsible heading per board —
   `Research Park  (15)` — so the table shows which listings came from where
   without a column repeating it on every row. Sections appear in the order the
@@ -148,30 +149,32 @@ The window is a real native Qt application (PySide6): a real menu bar in the sys
 - **Detail pane** — a `QScrollArea` containing:
   1. **Title + job ID**.
   2. **VJB URL** — link-coloured and clickable, with an explicit **"Open ↗"** button beside it. Both open the default browser via `QDesktopServices`; the button is disabled when the row has no usable URL.
-  3. **Company**, plus applied / follow-up / archived dates where they apply.
+  3. **Company + source + posting age** — which board the job came from, when the board says it was posted ("Posted: 2026-09-30 (12 days ago)"; falls back to the first-seen date when the board doesn't), plus applied / follow-up / archived dates where they apply.
   4. **Primary action button** — context-aware, checked in this order:
      - Archived job → **"↩ Unarchive"**.
      - Applied job → **"↻ Mark Further Follow Up"** (the button keeps this
        name; it resets `follow_up_at`).
      - To Apply job → **"✓ Mark Applied"** — atomic transition: clears `to_apply`, sets `reviewed=1`, and records `applied_at` / `follow_up_at`.
      - Reviewed job → **"↻ Revisit"** (clears reviewed, row returns to New/Old).
-     - Otherwise → **"✓ Mark Reviewed"** (sets reviewed=1).
+     - Otherwise → **"☆ Add to To Apply"**.
   5. **Secondary button**, in the same order:
      - Archived job → disabled (unarchive it first).
      - Applied job → **"★ Archive"**.
      - To Apply job → **"★ Remove from To Apply"**.
      - Reviewed job → disabled (can't re-add a reviewed job to To Apply).
-     - Otherwise → **"☆ Add to To Apply"**.
-  6. **Follow-up date editor** — only visible for applied jobs. Opens a `QDialog` with preset offsets (1d, 3d, 1w, 2w, 1m, 3m) and a `QDateEdit` with native calendar popup.
-  7. **Matched keyword chips**.
+     - Otherwise → **"✓ Mark Reviewed"**.
+  6. **Follow-up date editor** — only visible for applied jobs. Opens a `QDialog` with preset offsets (1d, 3d, 1w, 2w, 1m, 3m) and a `QDateEdit` with native calendar popup. The button flips to a warning colour and appends "overdue" when the date is in the past.
+  7. **Matched keyword chips** — click one to filter the table by that keyword.
   8. **Description / Requirements / Skills** sections in a `QTextBrowser` with HTML — text is selectable, copyable, and scrollable.
 
   Both buttons come from one state machine in `ui_qt/job_actions.py`, so a button's label and what it does can't disagree.
 
 - **Remembered layout** — window geometry, dock layout, sidebar visibility, splitter sizes and theme override are all persisted via `QSettings` (native: `~/Library/Preferences/edu.illinois.jobscanner.plist` on macOS, registry on Windows). Restart and the window comes back the way you left it.
-- **Background scans** — clicking "Run Scan" runs `pipeline.run` on a `QThread`; output streams to the log dock via a queued signal. The button disables itself until the scan finishes.
+- **Background scans** — clicking "Run Scan" runs `pipeline.run` on a `QThread`; output streams to the log dock via a queued signal. The button disables itself and an indeterminate progress bar appears in the status bar until the scan finishes.
+- **Status bar** — the right side always shows the current section's count plus the whole-database totals (`New: 7 · 80 jobs · 38 matching · 3 reviewed`); transient toasts (scan results, job actions, bulk actions) appear on the left.
+- **Startup follow-up alerts** — if any applied job's follow-up date is due (or the scanner archived a job you'd applied to), the app opens a "Follow-ups due" dialog on launch. Each entry offers **Go to job** (jumps to it in the right section) and **Open in Browser**.
 
-The First/Last seen timestamps are intentionally hidden — they're internal bookkeeping and not user-facing.
+The `last_seen` timestamp is internal bookkeeping; the detail pane shows the board's `date_posted` (with first-seen as a fallback) instead.
 
 ### Keyboard shortcuts
 
@@ -182,6 +185,8 @@ The First/Last seen timestamps are intentionally hidden — they're internal boo
 | `Cmd-R` | Refresh the table |
 | `Cmd-F` | Focus the search box |
 | `Esc` | Clear the search |
+| `Cmd-E` | Run the selected job's primary action |
+| `Cmd-Shift-E` | Run the selected job's secondary action |
 | `Cmd-L` | Toggle the log console |
 | `Cmd-B` | Collapse / expand the sidebar |
 | `Cmd-Return` | Run a scan |
@@ -391,16 +396,16 @@ python tests/smoke_skeleton.py             # standalone smoke (no DB needed)
 python tests/smoke_table.py
 ```
 
-98 tests in seven layers:
+158 tests in seven layers:
 
 | Module | Covers |
 | ------ | ------ |
 | `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune, id namespacing and per-source archiving |
 | `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards, both Clearinghouse markup shapes, and the VJB title promotion + its fallback |
 | `test_gui_grouping.py` | The table's per-source sections: registry ordering, headings with counts, sorting within sections, filtering dropping empty ones, headings not selectable as jobs, collapse surviving a relaunch |
-| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Applied → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings |
+| `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Applied → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings, action toasts, multi-select |
 | `test_gui_bulk_actions.py` | Every registered bulk action, both confirmation paths, the status-bar toast, the All section |
-| `test_gui_interactions.py` | Chip reuse across same-keyword refreshes, empty-state explanation, action shortcuts, context-menu signal, dock toggle, clipboard copy, the open-in-browser action |
+| `test_gui_interactions.py` | Chip reuse across same-keyword refreshes, empty-state explanation, action shortcuts, context-menu signal, dock toggle, clipboard copy, the open-in-browser action, keyword-chip filtering, the shown-count, Esc and log-dock startup regressions |
 | `test_gui_layout.py` | Window defaults, central splitter proportions, sidebar + log dock placement, follow-up dialog preset grid, layout restoration across launches |
 
 Notes:

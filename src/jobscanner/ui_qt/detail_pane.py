@@ -14,6 +14,7 @@ recreate the layout and the reader's scroll position is preserved.
 from __future__ import annotations
 
 import html
+from datetime import date
 from typing import Optional
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from jobscanner.timeutils import local_date_str, relative_days
+from jobscanner.timeutils import local_date_str, relative_days, to_local_date
 from jobscanner.ui_qt import job_actions as ja
 from jobscanner.ui_qt import theme
 from jobscanner.ui_qt.flow_layout import FlowLayout
@@ -42,6 +43,12 @@ _BODY_FIELDS: tuple[tuple[str, str], ...] = (
     ("Requirements", "requirements"),
     ("Skills", "skills"),
 )
+
+
+def _is_overdue(follow_up_at: str) -> bool:
+    """True when the follow-up date sits before today (local days)."""
+    d = to_local_date(follow_up_at)
+    return d is not None and d < date.today()
 
 
 def _build_body_html(job: dict, palette) -> str:
@@ -75,17 +82,22 @@ def _build_body_html(job: dict, palette) -> str:
     return "".join(parts)
 
 
-class _Chip(QLabel):
-    """A small rounded chip for a matched keyword."""
+class _Chip(QToolButton):
+    """A small rounded chip for a matched keyword. Clicking one filters
+    the table by that keyword."""
 
     def __init__(self, text: str, parent=None) -> None:
-        super().__init__(text, parent)
+        super().__init__(parent)
         p = theme.current_palette()
+        self.setText(text)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"Filter by \u201c{text}\u201d")
         self.setStyleSheet(
-            f"background-color: {p['chip_bg']}; color: {p['chip_text']}; "
-            f"border-radius: 10px; padding: 2px 10px;"
+            f"QToolButton {{ background-color: {p['chip_bg']}; "
+            f"color: {p['chip_text']}; border-radius: 10px; "
+            f"padding: 2px 10px; border: none; }} "
+            f"QToolButton:hover {{ background-color: {p['accent_hover']}; }}"
         )
-        self.setMargin(2)
 
 
 class DetailPane(QWidget):
@@ -94,6 +106,7 @@ class DetailPane(QWidget):
     actionInvoked = Signal(object)       # the ActionSpec.op string (or None)
     editFollowUpRequested = Signal()
     markNotAppliedRequested = Signal()
+    keywordClicked = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -205,6 +218,14 @@ class DetailPane(QWidget):
 
     # -- public API ------------------------------------------------------
 
+    def primary_op(self) -> Optional[str]:
+        """The current primary button's op id (for keyboard shortcuts)."""
+        return self._primary_op
+
+    def secondary_op(self) -> Optional[str]:
+        """The current secondary button's op id (for keyboard shortcuts)."""
+        return self._secondary_op
+
     def clear(self) -> None:
         self.job_id = None
         # Forget the last job, or a theme change would re-render its body
@@ -261,6 +282,9 @@ class DetailPane(QWidget):
         # The body HTML embeds colors too -- re-render with the same job.
         last_job = getattr(self, "_last_job", None)
         if last_job is not None:
+            state = ja.JobState.from_row(last_job)
+            self._render_follow_up(state, last_job.get("follow_up_at") or "")
+            self._render_not_applied(state)
             self.body.setHtml(_build_body_html(last_job, p))
 
     # -- internals -------------------------------------------------------
@@ -270,6 +294,18 @@ class DetailPane(QWidget):
         company = (job.get("company") or "").strip()
         if company:
             lines.append(f"Company: {company}")
+        source = (job.get("source") or "").strip()
+        if source:
+            from jobscanner.sources import SOURCE_LABELS
+
+            lines.append(f"Source: {SOURCE_LABELS.get(source, source)}")
+        posted = (job.get("date_posted") or "").strip()
+        if not posted:
+            posted = (job.get("first_seen_at") or "").strip()
+        if posted:
+            rel = relative_days(posted)
+            suffix = f"  ({rel})" if rel else ""
+            lines.append(f"Posted: {local_date_str(posted)}{suffix}")
         applied = (job.get("applied_at") or "").strip()
         if applied:
             lines.append(f"Applied: {local_date_str(applied)}")
@@ -327,11 +363,27 @@ class DetailPane(QWidget):
         # because it left the listing: the user may still chase it.
         if state.applied:
             pretty = local_date_str(follow_up_at) or "\u2014"
-            self.follow_up_btn.setText(
-                f"\u270e  Edit follow-up date ({pretty})")
+            text = f"\u270e  Edit follow-up date ({pretty})"
+            overdue = _is_overdue(follow_up_at)
+            if overdue:
+                text += "  \u2014  overdue"
+            self.follow_up_btn.setText(text)
+            self._style_follow_up(overdue)
             self.follow_up_btn.show()
         else:
             self.follow_up_btn.hide()
+
+    def _style_follow_up(self, overdue: bool) -> None:
+        """Style the follow-up button; overdue dates get the warning look."""
+        btn = self.follow_up_btn
+        if not overdue:
+            btn.setStyleSheet("")
+            return
+        p = theme.current_palette()
+        btn.setStyleSheet(
+            f"QPushButton {{ background: {p['warning']}; color: white; "
+            f"border: none; padding: 4px 12px; border-radius: 4px; }} "
+            f"QPushButton:hover {{ background: {p['warning_hover']}; }} ")
 
     def _render_not_applied(self, state: ja.JobState) -> None:
         if state.applied:
@@ -365,6 +417,8 @@ class DetailPane(QWidget):
             return
         for kw in keywords:
             chip = _Chip(kw, self.chips_flow)
+            chip.clicked.connect(
+                lambda _checked=False, k=kw: self.keywordClicked.emit(k))
             self.chips_layout.addWidget(chip)
 
     def _on_anchor_clicked(self, url: QUrl) -> None:

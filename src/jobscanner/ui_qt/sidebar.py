@@ -37,6 +37,7 @@ from jobscanner import storage as db
 from jobscanner.ui_qt import palette as palette_mod
 from jobscanner.ui_qt import theme
 from jobscanner.ui_qt.bulk_actions import BULK_ACTIONS, BulkAction
+from jobscanner.ui_qt.shortcuts import accel
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,15 @@ class _SectionsModel(QAbstractListModel):
             return key
         if role == Qt.TextAlignmentRole:
             return int(Qt.AlignLeft | Qt.AlignVCenter)
+        if role == Qt.ToolTipRole:
+            # The app binds Cmd/Ctrl-1..9 to these sections; surface that
+            # where the user is already looking instead of a doc page.
+            try:
+                number = db.COUNTED_SECTIONS.index(key) + 1
+            except ValueError:
+                return None
+            if 1 <= number <= 9:
+                return f"{label} \u2014 {accel()}-{number}"
         return None
 
     def set_sections(self, items: list[tuple[str, str, int]],
@@ -201,9 +211,14 @@ class BulkActionBar(QWidget):
 
 
 class KeywordPanel(QWidget):
-    """A small scrollable list of loaded keywords + Edit Keywords button."""
+    """A small scrollable list of loaded keywords + Edit Keywords button.
+
+    Clicking a keyword filters the table by it -- the sidebar doubles as a
+    quick "show me everything matching this" launcher.
+    """
 
     editRequested = Signal()
+    keywordClicked = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -247,9 +262,29 @@ class KeywordPanel(QWidget):
             self._list_layout.insertWidget(0, empty)
             return
         for i, kw in enumerate(keywords):
-            label = QLabel(kw, self._list_holder)
+            label = _ClickableKeyword(kw, self._list_holder)
             label.setWordWrap(False)
+            label.clicked.connect(
+                lambda _=False, k=kw: self.keywordClicked.emit(k))
             self._list_layout.insertWidget(i, label)
+
+
+class _ClickableKeyword(QLabel):
+    """A keyword label that emits ``clicked`` when the mouse presses it."""
+
+    clicked = Signal()
+
+    def __init__(self, text: str, parent=None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(f"Filter by \u201c{text}\u201d")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +298,7 @@ class SidebarDock(QDockWidget):
     sectionSelected = Signal(str)
     bulkActionInvoked = Signal(str)
     editKeywordsRequested = Signal()
+    keywordClicked = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__("Sidebar", parent)
@@ -298,6 +334,7 @@ class SidebarDock(QDockWidget):
         self._sections.sectionSelected.connect(self.sectionSelected)
         self._bulk.actionInvoked.connect(self.bulkActionInvoked)
         self._keywords.editRequested.connect(self.editKeywordsRequested)
+        self._keywords.keywordClicked.connect(self.keywordClicked)
 
     # -- public API ---------------------------------------------------
 

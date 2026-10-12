@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMenu
+from PySide6.QtWidgets import QMenu
 
 from support import check, eq, gui_app, gui_available, pump_events, run_module  # noqa: E402
 
@@ -23,27 +23,67 @@ def test_chip_widgets_are_reused_across_selections() -> None:
     each refresh; with Qt's smaller rebuild cost it's less visible but the
     behaviour is preserved -- same row stays selected and chips don't churn
     when the keyword string hasn't changed."""
+    from PySide6.QtWidgets import QToolButton
+
     with gui_app() as (app, _path, _kw):
         app.select_section(db.SECTION_ALL)
         pump_events()
         app._table.select_id("T0")
         pump_events()
-        before_ids = [id(w) for w in app.detail.chips_flow.findChildren(QLabel)]
+        before_ids = [id(w) for w in app.detail.chips_flow.findChildren(QToolButton)]
 
         # Same keywords (T0 is to_apply, no flip yet)
         app._run_job_op(ja.OP_ADD_TO_APPLY)
         pump_events()
         # After refresh the selection persists, so the chips should be
         # identical objects.
-        after_ids = [id(w) for w in app.detail.chips_flow.findChildren(QLabel)]
+        after_ids = [id(w) for w in app.detail.chips_flow.findChildren(QToolButton)]
         eq(before_ids, after_ids,
            "chips are reused across same-keyword refreshes")
 
         # Different keywords -- the chips_frame rebuilds.
-        app._table.select_id("T1")  # T1 has matched_keywords="python"
+        app._table.select_id("T1")  # T1 has no matched keywords
         pump_events()
-        check(0 < len(app.detail.chips_flow.findChildren(QLabel)),
-              "chips rebuild for a row with different keywords")
+        eq(len(app.detail.chips_flow.findChildren(QToolButton)), 0,
+           "chips clear for a row without matched keywords")
+
+
+def test_keyword_chips_filter_the_table() -> None:
+    """Clicking a matched-keyword chip drops that keyword into the search
+    box -- chips work as filters, not just as decorations."""
+    from PySide6.QtWidgets import QToolButton
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T2")  # matched_keywords="python"
+        pump_events()
+        chips = app.detail.chips_flow.findChildren(QToolButton)
+        check(chips, "the row has at least one chip")
+        chip = next(c for c in chips if c.text() == "python")
+        chip.click()
+        pump_events()
+        eq(app._search_edit.text(), "python",
+           "clicking the chip fills the search box")
+        eq(app._table.visible_job_count(), 3,
+           "the table filters down to the matching rows")
+
+
+def test_shown_counter_tracks_filters() -> None:
+    """The search row should say how many jobs the table is showing."""
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        eq(app._shown_label.text(), "6 shown",
+           "counter reports the full section")
+        app._search_edit.setText("Job 3")
+        pump_events()
+        eq(app._shown_label.text(), "1 shown",
+           "counter tracks the search filter")
+        app._search_edit.clear()
+        pump_events()
+        eq(app._shown_label.text(), "6 shown",
+           "counter restores when the search clears")
 
 
 def test_open_button_tracks_whether_there_is_a_url() -> None:
@@ -118,6 +158,8 @@ def test_action_shortcuts_are_bound() -> None:
             ("toggle_sidebar", a.toggle_sidebar),
             ("toggle_log", a.toggle_log),
             ("open_in_browser", a.open_in_browser),
+            ("job_primary", a.job_primary),
+            ("job_secondary", a.job_secondary),
             ("run_scan", a.run_scan),
             ("refresh", a.refresh),
         ):
@@ -238,6 +280,132 @@ def test_copy_job_id_action_uses_clipboard() -> None:
         pump_events()
         eq(QGuiApplication.clipboard().text(), "T0",
            "Copy Job ID copies the selected id to the clipboard")
+
+
+def test_esc_clears_the_search_box() -> None:
+    """README: 'Esc -- Clear the search'. For a while it did nothing."""
+    from PySide6.QtGui import QShortcut
+
+    with gui_app() as (app, _path, _kw):
+        app._search_edit.setText("python")
+        pump_events()
+        eq(app._search_edit.text(), "python", "search text set")
+
+        esc = next(
+            (s for s in app.findChildren(QShortcut)
+             if s.key().toString() == "Esc"),
+            None)
+        check(esc is not None, "an Esc shortcut is registered on the window")
+        esc.activated.emit()
+        pump_events()
+        eq(app._search_edit.text(), "", "Esc clears the search box")
+
+
+def test_saved_state_cannot_resurrect_the_log_dock() -> None:
+    """Regression: a session that closed with the log dock open (a scan
+    ran) saved it that way, and restoreState() brought it back empty on
+    the next launch, eating a quarter of the window."""
+    from jobscanner.ui_qt.settings import app_settings
+
+    with gui_app() as (app, _path, _kw):
+        app.log_dock.show()
+        pump_events()
+        saved = app.saveState()
+    check(saved, "captured a saved window state")
+
+    settings = app_settings()
+    previous = settings.value("window/state")
+    settings.setValue("window/state", saved)
+    try:
+        with gui_app() as (app2, _path2, _kw2):
+            check(not app2.log_dock.isVisible(),
+                  "the log dock stays hidden even though the saved state "
+                  "had it open")
+    finally:
+        if previous is None:
+            settings.remove("window/state")
+        else:
+            settings.setValue("window/state", previous)
+
+
+def test_detail_meta_shows_source_and_posted_age() -> None:
+    """The board and the posting's age matter when triaging; both are in
+    the DB but used to be invisible in the GUI."""
+    from jobscanner.sources import SOURCE_LABELS
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T0")
+        pump_events()
+        meta = app.detail.meta_label.text()
+        check(f"Source: {SOURCE_LABELS['vjb']}" in meta,
+              f"meta names the source board ({meta!r})")
+        check("Posted:" in meta and "today" in meta,
+              f"meta shows the posting date with its relative age ({meta!r})")
+
+
+def test_overdue_follow_up_button_warns() -> None:
+    """An overdue follow-up date should not need mental date arithmetic."""
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T2", path)
+        db.set_follow_up("T2", "2020-01-01T00:00:00+00:00", path)
+        app.select_section(db.SECTION_FOLLOW_UP)
+        pump_events()
+        app._table.select_id("T2")
+        pump_events()
+        check(app.detail.follow_up_btn.isVisible(),
+              "the follow-up button shows for an applied row")
+        check("overdue" in app.detail.follow_up_btn.text().lower(),
+              f"the button says the date is overdue "
+              f"({app.detail.follow_up_btn.text()!r})")
+        from jobscanner.ui_qt import theme
+        check(theme.current_palette()["warning"] in
+              app.detail.follow_up_btn.styleSheet(),
+              "the overdue button carries the warning color")
+
+
+def test_triage_shortcuts_run_the_detail_pane_actions() -> None:
+    """Cmd+E / Cmd+Shift+E triage the selected job without a mouse."""
+    with gui_app() as (app, path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        check(not app.actions.job_primary.isEnabled(),
+              "primary triage shortcut disabled with nothing selected")
+
+        app._table.select_id("T0")
+        pump_events()
+        check(app.actions.job_primary.isEnabled(),
+              "primary triage shortcut enabled once a job is selected")
+        app.actions.job_primary.trigger()  # Add to To Apply on a New row
+        pump_events()
+        check(bool(db.get_job("T0", path)["to_apply"]),
+              "Cmd+E ran the primary action")
+
+        app._table.select_id("T1")
+        pump_events()
+        app.actions.job_secondary.trigger()  # Mark Reviewed on a New row
+        pump_events()
+        check(bool(db.get_job("T1", path)["reviewed"]),
+              "Cmd+Shift+E ran the secondary action")
+
+
+def test_sidebar_rows_hint_at_their_shortcuts() -> None:
+    """Cmd-1..7 jump between sections; the sidebar rows should say so."""
+    from jobscanner.ui_qt.sidebar import _SectionsModel
+
+    with gui_app() as (app, _path, _kw):
+        model = app.sidebar._sections._model
+        hints = {}
+        for r in range(model.rowCount()):
+            idx = model.index(r, 0)
+            key = model.data(idx, _SectionsModel.KEY_ROLE)
+            hints[key] = model.data(idx, Qt.ToolTipRole)
+        first_key = db.COUNTED_SECTIONS[0]
+        check(hints.get(first_key) ==
+              f"{db.SECTION_LABELS[first_key]} \u2014 {ACCEL}-1",
+              f"the first section's tooltip names its shortcut "
+              f"({hints.get(first_key)!r})")
 
 
 if __name__ == "__main__":

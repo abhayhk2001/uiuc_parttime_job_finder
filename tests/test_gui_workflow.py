@@ -445,7 +445,148 @@ def test_follow_up_alerts_dialog_builds() -> None:
         eq(dialog._list.count(), len(jobs), "one list entry per alert")
         check("follow up" in dialog._item_text(jobs[0]).lower(),
               "entry text mentions the follow-up")
+        eq(dialog._open_btn.text(), "Open in Browser",
+           "the dialog offers Open in Browser")
         dialog.close()
+
+
+def test_sidebar_keywords_filter_the_table() -> None:
+    """Clicking a keyword in the sidebar filters the table by it."""
+    from jobscanner.ui_qt.sidebar import _ClickableKeyword
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        labels = app.sidebar._keywords._list_holder.findChildren(
+            _ClickableKeyword)
+        check(labels, "the sidebar lists the loaded keywords")
+        first = labels[0]
+        first.clicked.emit()
+        pump_events()
+        eq(app._search_edit.text(), first.text(),
+           "clicking a sidebar keyword fills the search box")
+
+
+def _proxy_index_for(app, job_id: str):
+    """The proxy index of ``job_id``'s row, or None if not visible."""
+    proxy = app._table.proxy()
+    for g in range(proxy.rowCount()):
+        parent = proxy.index(g, 0)
+        for r in range(proxy.rowCount(parent)):
+            idx = proxy.index(r, 0, parent)
+            if proxy.data(idx, JobRoles.JobIdRole) == job_id:
+                return idx
+    return None
+
+
+def test_multi_select_acts_on_every_selected_row() -> None:
+    """Several rows can be selected and triaged in one go."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    with gui_app() as (app, path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        app._table.select_id("T0")
+        idx2 = _proxy_index_for(app, "T2")
+        check(idx2 is not None, "T2 is visible")
+        app._table.selectionModel().select(idx2, QItemSelectionModel.Select)
+        pump_events()
+        eq(set(app._table.selected_job_ids()), {"T0", "T2"},
+           "both rows are selected")
+
+        app._run_op_on_selection(ja.OP_MARK_REVIEWED)
+        pump_events()
+        check(bool(db.get_job("T0", path)["reviewed"]), "first row reviewed")
+        check(bool(db.get_job("T2", path)["reviewed"]), "second row reviewed")
+        check(not db.get_job("T1", path)["reviewed"],
+              "unselected rows are untouched")
+        message = app.status_bar.currentMessage()
+        check("Marked reviewed 2 job(s)" in message,
+              f"summary toast counts the rows ({message!r})")
+
+
+def test_multi_select_menu_lists_ops_with_counts() -> None:
+    """The multi-select context menu shows each op with a supported count."""
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtWidgets import QMenu
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        app._table.select_id("T0")
+        idx2 = _proxy_index_for(app, "T2")
+        app._table.selectionModel().select(idx2, QItemSelectionModel.Select)
+        pump_events()
+        app._show_job_menu("T0", app.mapToGlobal(app.rect().center()))
+        pump_events()
+        menus = [m for m in app.findChildren(QMenu) if m.isVisible()]
+        check(menus, "the context menu opened")
+        labels = [a.text() for a in menus[-1].actions() if a.text()]
+        check("2 jobs selected" in labels,
+              f"the menu names the selection ({labels})")
+        check("Mark Reviewed (2)" in labels,
+              f"supported ops carry their counts ({labels})")
+        check("Archive (0)" in labels,
+              f"unsupported ops count zero ({labels})")
+        menus[-1].close()
+
+
+def test_job_actions_confirm_with_a_status_toast() -> None:
+    """The row vanishes from its section after most actions; the status
+    bar should say what happened and to which job."""
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T0")
+        pump_events()
+        app._run_job_op(ja.OP_ADD_TO_APPLY)
+        pump_events()
+        message = app.status_bar.currentMessage()
+        check(message and "Added to To Apply" in message
+              and "Job 0" in message,
+              f"toast confirms the action and the job ({message!r})")
+
+
+def test_status_bar_shows_current_section_count() -> None:
+    """Global totals alone ('80 jobs') don't say what's in this section."""
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        check(app._stats_label.text().startswith("New: 6"),
+              f"status bar leads with the current section "
+              f"({app._stats_label.text()!r})")
+        app.select_section(db.SECTION_ARCHIVED)
+        pump_events()
+        check(app._stats_label.text().startswith("Archived: 0"),
+              f"status bar follows the section switch "
+              f"({app._stats_label.text()!r})")
+
+
+def test_scan_ui_toggles_button_progress_and_bulk() -> None:
+    """While scanning, the button disables, an indeterminate progress bar
+    shows, and the sidebar bulk block locks -- and back again."""
+    with gui_app() as (app, _path, _kw):
+        app._set_scanning_ui(True)
+        pump_events()
+        check(not app.actions.run_scan.isEnabled(),
+              "Run Scan disables while scanning")
+        eq(app.actions.run_scan.text(), "Scanning\u2026",
+           "button text changes while scanning")
+        check(app._scan_progress.isVisible(),
+              "an indeterminate progress bar shows while scanning")
+        check(not app.sidebar._bulk.isEnabled(),
+              "the sidebar bulk block locks while scanning")
+
+        app._set_scanning_ui(False)
+        pump_events()
+        check(app.actions.run_scan.isEnabled(),
+              "Run Scan re-enables when the scan ends")
+        eq(app.actions.run_scan.text(), "&Run Scan",
+           "button text restores when the scan ends")
+        check(not app._scan_progress.isVisible(),
+              "the progress bar hides when the scan ends")
+        check(app.sidebar._bulk.isEnabled(),
+              "the bulk block unlocks when the scan ends")
 
 
 if __name__ == "__main__":
