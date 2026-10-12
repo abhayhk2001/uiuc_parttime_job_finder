@@ -264,6 +264,55 @@ Notes:
 - `--no-gui` is belt-and-suspenders: the CLI also auto-detects a non-TTY stdout and skips the GUI on its own.
 - If you also use the `.app`, prefix the command with `JOBSCANNER_DATA_DIR="$HOME/Library/Application Support/UIUC Part-Time Job Scanner"` so cron and the app share one database (see "Moving existing data into the bundled app").
 
+## Nightly scan with launchd (macOS)
+
+macOS `cron` silently drops jobs that fall while the Mac is asleep or off.
+A launchd LaunchAgent handles the three cases a nightly job actually
+needs:
+
+- **every day at 21:00** local time (`StartCalendarInterval`);
+- **while the screen is locked** — the agent runs in your GUI session;
+- **after waking from sleep** having missed 21:00 — launchd runs missed
+  calendar jobs at wake, and **after a reboot** (`RunAtLoad`). A
+  `.last_nightly_scan` marker in the app's data directory makes sure one
+  successful scan satisfies a slot, so wakes/reboots after an on-time run
+  do nothing, and a *failed* scan (no network) retries at the next
+  wake/reboot.
+
+Setup:
+
+```bash
+./build-mac.sh                          # build the .app (contains --scan-and-open)
+scripts/install-nightly-agent.sh        # install + bootstrap the agent
+```
+
+Check that it loaded:
+
+```bash
+launchctl print gui/$(id -u)/edu.illinois.jobscanner.nightly
+```
+
+To test it once without waiting for 21:00:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/edu.illinois.jobscanner.nightly
+```
+
+The agent runs the *built* `.app` with `--scan-and-open`: it scans every
+source into the same AppData database the app uses, then opens the GUI
+with fresh results. Scan output is logged to
+`~/Library/Application Support/UIUC Part-Time Job Scanner/scanner-nightly.log`.
+
+Rebuilding the app (`./build-mac.sh`) never breaks the schedule — the
+agent points at the stable `dist/` path, which the build replaces in
+place. Re-run `scripts/install-nightly-agent.sh` only if you move the
+repository. Remove the agent with
+`scripts/install-nightly-agent.sh --uninstall`.
+
+Leave the GUI's "Scan on open" setting off if you use this: the nightly
+flow scans first and then opens the GUI, so an on-open scan would just
+run a second one.
+
 ## Files
 
 ```
