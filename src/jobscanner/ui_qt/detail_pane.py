@@ -212,6 +212,14 @@ class DetailPane(QWidget):
 
     # -- public API ------------------------------------------------------
 
+    def primary_op(self) -> Optional[str]:
+        """The current primary button's op id (for keyboard shortcuts)."""
+        return self._primary_op
+
+    def secondary_op(self) -> Optional[str]:
+        """The current secondary button's op id (for keyboard shortcuts)."""
+        return self._secondary_op
+
     def clear(self) -> None:
         self.job_id = None
         # Forget the last job, or a theme change would re-render its body

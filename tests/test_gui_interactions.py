@@ -118,6 +118,8 @@ def test_action_shortcuts_are_bound() -> None:
             ("toggle_sidebar", a.toggle_sidebar),
             ("toggle_log", a.toggle_log),
             ("open_in_browser", a.open_in_browser),
+            ("job_primary", a.job_primary),
+            ("job_secondary", a.job_secondary),
             ("run_scan", a.run_scan),
             ("refresh", a.refresh),
         ):
@@ -321,6 +323,49 @@ def test_overdue_follow_up_button_warns() -> None:
         check(theme.current_palette()["warning"] in
               app.detail.follow_up_btn.styleSheet(),
               "the overdue button carries the warning color")
+
+
+def test_triage_shortcuts_run_the_detail_pane_actions() -> None:
+    """Cmd+E / Cmd+Shift+E triage the selected job without a mouse."""
+    with gui_app() as (app, path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        check(not app.actions.job_primary.isEnabled(),
+              "primary triage shortcut disabled with nothing selected")
+
+        app._table.select_id("T0")
+        pump_events()
+        check(app.actions.job_primary.isEnabled(),
+              "primary triage shortcut enabled once a job is selected")
+        app.actions.job_primary.trigger()  # Add to To Apply on a New row
+        pump_events()
+        check(bool(db.get_job("T0", path)["to_apply"]),
+              "Cmd+E ran the primary action")
+
+        app._table.select_id("T1")
+        pump_events()
+        app.actions.job_secondary.trigger()  # Mark Reviewed on a New row
+        pump_events()
+        check(bool(db.get_job("T1", path)["reviewed"]),
+              "Cmd+Shift+E ran the secondary action")
+
+
+def test_sidebar_rows_hint_at_their_shortcuts() -> None:
+    """Cmd-1..7 jump between sections; the sidebar rows should say so."""
+    from jobscanner.ui_qt.sidebar import _SectionsModel
+
+    with gui_app() as (app, _path, _kw):
+        model = app.sidebar._sections._model
+        hints = {}
+        for r in range(model.rowCount()):
+            idx = model.index(r, 0)
+            key = model.data(idx, _SectionsModel.KEY_ROLE)
+            hints[key] = model.data(idx, Qt.ToolTipRole)
+        first_key = db.COUNTED_SECTIONS[0]
+        check(hints.get(first_key) ==
+              f"{db.SECTION_LABELS[first_key]} \u2014 {ACCEL}-1",
+              f"the first section's tooltip names its shortcut "
+              f"({hints.get(first_key)!r})")
 
 
 if __name__ == "__main__":

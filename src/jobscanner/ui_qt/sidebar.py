@@ -37,6 +37,7 @@ from jobscanner import storage as db
 from jobscanner.ui_qt import palette as palette_mod
 from jobscanner.ui_qt import theme
 from jobscanner.ui_qt.bulk_actions import BULK_ACTIONS, BulkAction
+from jobscanner.ui_qt.shortcuts import accel
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,15 @@ class _SectionsModel(QAbstractListModel):
             return key
         if role == Qt.TextAlignmentRole:
             return int(Qt.AlignLeft | Qt.AlignVCenter)
+        if role == Qt.ToolTipRole:
+            # The app binds Cmd/Ctrl-1..9 to these sections; surface that
+            # where the user is already looking instead of a doc page.
+            try:
+                number = db.COUNTED_SECTIONS.index(key) + 1
+            except ValueError:
+                return None
+            if 1 <= number <= 9:
+                return f"{label} \u2014 {accel()}-{number}"
         return None
 
     def set_sections(self, items: list[tuple[str, str, int]],

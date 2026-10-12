@@ -235,6 +235,8 @@ class JobScannerApp(QMainWindow):
         a.open_in_browser.triggered.connect(self._open_selected_in_browser)
         a.copy_job_id.triggered.connect(self._copy_selected_job_id)
         a.copy_url.triggered.connect(self._copy_selected_url)
+        a.job_primary.triggered.connect(self._run_primary_job_action)
+        a.job_secondary.triggered.connect(self._run_secondary_job_action)
         a.run_scan.triggered.connect(self._start_scan)
         a.refresh.triggered.connect(self.refresh)
         a.about.triggered.connect(self._show_about)
@@ -489,7 +491,18 @@ class JobScannerApp(QMainWindow):
 
     # -- table selection handlers --------------------------------------
 
+    def _run_primary_job_action(self) -> None:
+        self._run_job_op(self.detail.primary_op())
+
+    def _run_secondary_job_action(self) -> None:
+        self._run_job_op(self.detail.secondary_op())
+
     def _on_table_selection(self, job_id) -> None:
+        # The triage shortcuts need a job to act on; keep them in sync
+        # with the selection.
+        has_job = job_id is not None
+        self.actions.job_primary.setEnabled(has_job)
+        self.actions.job_secondary.setEnabled(has_job)
         if job_id is None:
             self.detail.clear()
             return
