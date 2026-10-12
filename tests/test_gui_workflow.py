@@ -448,6 +448,64 @@ def test_follow_up_alerts_dialog_builds() -> None:
         dialog.close()
 
 
+def test_job_actions_confirm_with_a_status_toast() -> None:
+    """The row vanishes from its section after most actions; the status
+    bar should say what happened and to which job."""
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T0")
+        pump_events()
+        app._run_job_op(ja.OP_ADD_TO_APPLY)
+        pump_events()
+        message = app.status_bar.currentMessage()
+        check(message and "Added to To Apply" in message
+              and "Job 0" in message,
+              f"toast confirms the action and the job ({message!r})")
+
+
+def test_status_bar_shows_current_section_count() -> None:
+    """Global totals alone ('80 jobs') don't say what's in this section."""
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        check(app._stats_label.text().startswith("New: 6"),
+              f"status bar leads with the current section "
+              f"({app._stats_label.text()!r})")
+        app.select_section(db.SECTION_ARCHIVED)
+        pump_events()
+        check(app._stats_label.text().startswith("Archived: 0"),
+              f"status bar follows the section switch "
+              f"({app._stats_label.text()!r})")
+
+
+def test_scan_ui_toggles_button_progress_and_bulk() -> None:
+    """While scanning, the button disables, an indeterminate progress bar
+    shows, and the sidebar bulk block locks -- and back again."""
+    with gui_app() as (app, _path, _kw):
+        app._set_scanning_ui(True)
+        pump_events()
+        check(not app.actions.run_scan.isEnabled(),
+              "Run Scan disables while scanning")
+        eq(app.actions.run_scan.text(), "Scanning\u2026",
+           "button text changes while scanning")
+        check(app._scan_progress.isVisible(),
+              "an indeterminate progress bar shows while scanning")
+        check(not app.sidebar._bulk.isEnabled(),
+              "the sidebar bulk block locks while scanning")
+
+        app._set_scanning_ui(False)
+        pump_events()
+        check(app.actions.run_scan.isEnabled(),
+              "Run Scan re-enables when the scan ends")
+        eq(app.actions.run_scan.text(), "&Run Scan",
+           "button text restores when the scan ends")
+        check(not app._scan_progress.isVisible(),
+              "the progress bar hides when the scan ends")
+        check(app.sidebar._bulk.isEnabled(),
+              "the bulk block unlocks when the scan ends")
+
+
 if __name__ == "__main__":
     ok, reason = gui_available()
     _, failed, _ = run_module(globals(), "GUI workflow",

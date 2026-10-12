@@ -128,3 +128,27 @@ def apply_op(op: Optional[str], job_id: str, path: Path) -> bool:
     else:
         raise ValueError(f"Unknown job operation: {op!r}")
     return True
+
+
+_OP_TOASTS: dict[str, str] = {
+    OP_MARK_REVIEWED: "Marked reviewed",
+    OP_REVISIT: "Revisited",
+    OP_MARK_APPLIED: "Marked applied",
+    OP_FURTHER_FOLLOW_UP: "Follow-up reset",
+    OP_UNARCHIVE: "Unarchived",
+    OP_ADD_TO_APPLY: "Added to To Apply",
+    OP_REMOVE_TO_APPLY: "Removed from To Apply",
+    OP_ARCHIVE: "Archived",
+    OP_MARK_NOT_APPLIED: "Marked not applied",
+}
+
+
+def describe_op(op: Optional[str], job: Optional[dict]) -> str:
+    """A status-bar toast confirming ``op`` ran against ``job``.
+
+    The row vanishes from its section after most ops; without a toast the
+    only proof anything happened is the refreshed table.
+    """
+    verb = _OP_TOASTS.get(op or "", "Updated")
+    title = ((job or {}).get("title") or "").strip() or "job"
+    return f"{verb}: {title}"

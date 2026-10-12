@@ -242,15 +242,19 @@ def test_copy_job_id_action_uses_clipboard() -> None:
 
 def test_esc_clears_the_search_box() -> None:
     """README: 'Esc -- Clear the search'. For a while it did nothing."""
-    from PySide6.QtTest import QTest
+    from PySide6.QtGui import QShortcut
 
     with gui_app() as (app, _path, _kw):
-        app._search_edit.setFocus()
         app._search_edit.setText("python")
         pump_events()
         eq(app._search_edit.text(), "python", "search text set")
 
-        QTest.keyClick(app._search_edit, Qt.Key_Escape)
+        esc = next(
+            (s for s in app.findChildren(QShortcut)
+             if s.key().toString() == "Esc"),
+            None)
+        check(esc is not None, "an Esc shortcut is registered on the window")
+        esc.activated.emit()
         pump_events()
         eq(app._search_edit.text(), "", "Esc clears the search box")
 
@@ -280,6 +284,43 @@ def test_saved_state_cannot_resurrect_the_log_dock() -> None:
             settings.remove("window/state")
         else:
             settings.setValue("window/state", previous)
+
+
+def test_detail_meta_shows_source_and_posted_age() -> None:
+    """The board and the posting's age matter when triaging; both are in
+    the DB but used to be invisible in the GUI."""
+    from jobscanner.sources import SOURCE_LABELS
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        app._table.select_id("T0")
+        pump_events()
+        meta = app.detail.meta_label.text()
+        check(f"Source: {SOURCE_LABELS['vjb']}" in meta,
+              f"meta names the source board ({meta!r})")
+        check("Posted:" in meta and "today" in meta,
+              f"meta shows the posting date with its relative age ({meta!r})")
+
+
+def test_overdue_follow_up_button_warns() -> None:
+    """An overdue follow-up date should not need mental date arithmetic."""
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T2", path)
+        db.set_follow_up("T2", "2020-01-01T00:00:00+00:00", path)
+        app.select_section(db.SECTION_FOLLOW_UP)
+        pump_events()
+        app._table.select_id("T2")
+        pump_events()
+        check(app.detail.follow_up_btn.isVisible(),
+              "the follow-up button shows for an applied row")
+        check("overdue" in app.detail.follow_up_btn.text().lower(),
+              f"the button says the date is overdue "
+              f"({app.detail.follow_up_btn.text()!r})")
+        from jobscanner.ui_qt import theme
+        check(theme.current_palette()["warning"] in
+              app.detail.follow_up_btn.styleSheet(),
+              "the overdue button carries the warning color")
 
 
 if __name__ == "__main__":

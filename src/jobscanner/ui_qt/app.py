@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QSizePolicy,
     QSplitter,
     QStatusBar,
@@ -145,6 +146,15 @@ class JobScannerApp(QMainWindow):
 
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
+        # An indeterminate bar that shows only while a scan runs. Text
+        # alone ("Scanning…") left users wondering whether the app had
+        # hung on a slow board.
+        self._scan_progress = QProgressBar(self.status_bar)
+        self._scan_progress.setRange(0, 0)
+        self._scan_progress.setFixedWidth(150)
+        self._scan_progress.setMaximumHeight(14)
+        self._scan_progress.hide()
+        self.status_bar.addWidget(self._scan_progress)
         # Totals live in a permanent widget on the right. As a status
         # message they were rewritten on every refresh, which wiped
         # "Scan complete." and every bulk-action toast the instant it
@@ -258,14 +268,15 @@ class JobScannerApp(QMainWindow):
         self._table.set_rows(rows)
         if prev_selected:
             self._table.select_id(prev_selected)
-        self._refresh_status()
-        self._on_table_selection(self._table.selected_id())
 
         # Refresh sidebar section counts.
         try:
             counts = db.get_section_counts(self.db_path)
         except Exception:  # noqa: BLE001
             counts = {}
+        self._refresh_status(counts)
+        self._on_table_selection(self._table.selected_id())
+
         sections_with_counts = [(k, label, counts.get(k, 0))
                                 for k, label, _ in build_sections_list()]
         self.sidebar.refresh_sections(sections_with_counts, counts, self._section)
@@ -274,15 +285,18 @@ class JobScannerApp(QMainWindow):
         except Exception:  # noqa: BLE001
             self.sidebar.set_keywords([])
 
-    def _refresh_status(self) -> None:
+    def _refresh_status(self, counts: dict | None = None) -> None:
         try:
             stats = db.get_stats(self.db_path)
         except Exception:  # noqa: BLE001
             self._stats_label.setText("")
             return
+        counts = counts or {}
+        label = db.SECTION_LABELS.get(self._section, self._section)
+        current = counts.get(self._section, 0)
         self._stats_label.setText(
-            f"{stats['total']} jobs · {stats['matching']} matching · "
-            f"{stats['reviewed']} reviewed"
+            f"{label}: {current} · {stats['total']} jobs · "
+            f"{stats['matching']} matching · {stats['reviewed']} reviewed"
         )
 
     def _empty_message(self) -> str:
@@ -437,6 +451,15 @@ class JobScannerApp(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Update failed", str(exc))
             return
+        # The row is about to leave this section (or change color in
+        # place); confirm the action with a toast naming the job.
+        acted_on = self._table.current_job_dict()
+        if not acted_on or acted_on.get("job_id") != job_id:
+            try:
+                acted_on = db.get_job(job_id, self.db_path)
+            except Exception:  # noqa: BLE001
+                acted_on = {}
+        self.status_bar.showMessage(ja.describe_op(op, acted_on), 4000)
         self.refresh()
         if job_id not in self._table.visible_job_ids():
             self._table.select_visible_index(position)
@@ -572,10 +595,8 @@ class JobScannerApp(QMainWindow):
         if self._scanning:
             return
         self._scanning = True
-        self.actions.run_scan.setEnabled(False)
-        self.actions.run_scan.setText("Scanning\u2026")
+        self._set_scanning_ui(True)
         self.status_bar.showMessage("Scanning\u2026")
-        self.sidebar.set_bulk_enabled(False)
 
         # Show the log dock while scanning so the user sees progress.
         if not self.log_dock.isVisible():
@@ -598,9 +619,7 @@ class JobScannerApp(QMainWindow):
 
     def _on_scan_finished(self, success: bool) -> None:
         self._scanning = False
-        self.actions.run_scan.setEnabled(True)
-        self.actions.run_scan.setText("&Run Scan")
-        self.sidebar.set_bulk_enabled(True)
+        self._set_scanning_ui(False)
         if success:
             self.status_bar.showMessage("Scan complete.", 5000)
         else:
@@ -610,6 +629,14 @@ class JobScannerApp(QMainWindow):
         self._scan_thread = None
         if self._close_after_scan:
             self.close()
+
+    def _set_scanning_ui(self, started: bool) -> None:
+        """Toggle everything that tracks scan state: button, progress bar,
+        sidebar bulk block. Shared by start/finish so tests can drive it."""
+        self.actions.run_scan.setEnabled(not started)
+        self.actions.run_scan.setText("Scanning\u2026" if started else "&Run Scan")
+        self.sidebar.set_bulk_enabled(not started)
+        self._scan_progress.setVisible(started)
 
     def _on_color_scheme_changed(self, _scheme) -> None:
         self._table.refresh_palette()
