@@ -467,6 +467,70 @@ def test_sidebar_keywords_filter_the_table() -> None:
            "clicking a sidebar keyword fills the search box")
 
 
+def _proxy_index_for(app, job_id: str):
+    """The proxy index of ``job_id``'s row, or None if not visible."""
+    proxy = app._table.proxy()
+    for g in range(proxy.rowCount()):
+        parent = proxy.index(g, 0)
+        for r in range(proxy.rowCount(parent)):
+            idx = proxy.index(r, 0, parent)
+            if proxy.data(idx, JobRoles.JobIdRole) == job_id:
+                return idx
+    return None
+
+
+def test_multi_select_acts_on_every_selected_row() -> None:
+    """Several rows can be selected and triaged in one go."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    with gui_app() as (app, path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        app._table.select_id("T0")
+        idx2 = _proxy_index_for(app, "T2")
+        check(idx2 is not None, "T2 is visible")
+        app._table.selectionModel().select(idx2, QItemSelectionModel.Select)
+        pump_events()
+        eq(set(app._table.selected_job_ids()), {"T0", "T2"},
+           "both rows are selected")
+
+        app._run_op_on_selection(ja.OP_MARK_REVIEWED, "Mark Reviewed")
+        pump_events()
+        check(bool(db.get_job("T0", path)["reviewed"]), "first row reviewed")
+        check(bool(db.get_job("T2", path)["reviewed"]), "second row reviewed")
+        check(not db.get_job("T1", path)["reviewed"],
+              "unselected rows are untouched")
+        message = app.status_bar.currentMessage()
+        check("Marked reviewed 2 job(s)" in message,
+              f"summary toast counts the rows ({message!r})")
+
+
+def test_multi_select_menu_lists_ops_with_counts() -> None:
+    """The multi-select context menu shows each op with a supported count."""
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtWidgets import QMenu
+
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        app._table.select_id("T0")
+        idx2 = _proxy_index_for(app, "T2")
+        app._table.selectionModel().select(idx2, QItemSelectionModel.Select)
+        pump_events()
+        app._show_job_menu("T0", app.mapToGlobal(app.rect().center()))
+        pump_events()
+        menus = [m for m in app.findChildren(QMenu) if m.isVisible()]
+        check(menus, "the context menu opened")
+        labels = [a.text() for a in menus[-1].actions() if a.text()]
+        check("2 jobs selected" in labels,
+              f"the menu names the selection ({labels})")
+        check("Mark Reviewed (2)" in labels,
+              f"supported ops carry their counts ({labels})")
+        check("Archive (0)" in labels,
+              f"unsupported ops count zero ({labels})")
+        menus[-1].close()
+
+
 def test_job_actions_confirm_with_a_status_toast() -> None:
     """The row vanishes from its section after most actions; the status
     bar should say what happened and to which job."""

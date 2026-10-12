@@ -152,3 +152,38 @@ def describe_op(op: Optional[str], job: Optional[dict]) -> str:
     verb = _OP_TOASTS.get(op or "", "Updated")
     title = ((job or {}).get("title") or "").strip() or "job"
     return f"{verb}: {title}"
+
+
+def op_past_tense(op: str) -> str:
+    """The past-tense verb for ``op``, for multi-row summary toasts."""
+    return _OP_TOASTS.get(op, "Updated")
+
+
+def ops_for_job(job: Optional[dict]) -> set[str]:
+    """Every op the state machine currently offers for ``job``.
+
+    Powers the multi-select context menu: an op appears enabled when at
+    least one selected row supports it, with a per-op count.
+    """
+    state = JobState.from_row(job)
+    ops: set[str] = set()
+    for spec in (primary_action(state), secondary_action(state)):
+        if spec.op and spec.enabled:
+            ops.add(spec.op)
+    if state.applied:
+        ops.add(OP_MARK_NOT_APPLIED)
+    return ops
+
+
+#: The multi-select context menu's rows, in a stable order.
+MULTI_OP_LABELS: tuple[tuple[str, str], ...] = (
+    (OP_MARK_REVIEWED, "Mark Reviewed"),
+    (OP_REVISIT, "Revisit"),
+    (OP_ADD_TO_APPLY, "Add to To Apply"),
+    (OP_REMOVE_TO_APPLY, "Remove from To Apply"),
+    (OP_MARK_APPLIED, "Mark Applied"),
+    (OP_ARCHIVE, "Archive"),
+    (OP_UNARCHIVE, "Unarchive"),
+    (OP_FURTHER_FOLLOW_UP, "Mark Further Follow Up"),
+    (OP_MARK_NOT_APPLIED, "Mark Not Applied"),
+)

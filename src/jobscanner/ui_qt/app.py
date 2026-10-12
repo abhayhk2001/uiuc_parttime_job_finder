@@ -531,9 +531,14 @@ class JobScannerApp(QMainWindow):
             self._open_selected_in_browser()
 
     def _show_job_menu(self, job_id: str, global_pos) -> None:
-        """Right-click menu for one job. The view has already made it the
-        current row, so the detail pane -- and every handler here that
-        reads it -- is on this job."""
+        """Right-click menu for one job -- or for every selected job.
+
+        With several rows selected the menu offers each supported op with
+        a count of how many rows it would touch."""
+        selected = self._table.selected_job_ids()
+        if len(selected) > 1:
+            self._show_multi_job_menu(selected, global_pos)
+            return
         job = self._table.current_job_dict() or db.get_job(job_id, self.db_path) or {}
         state = ja.JobState.from_row(job)
         menu = QMenu(self)
@@ -553,6 +558,50 @@ class JobScannerApp(QMainWindow):
         menu.addAction(self.actions.copy_job_id)
         menu.addAction(self.actions.copy_url)
         menu.popup(global_pos)
+
+    def _show_multi_job_menu(self, job_ids: list[str], global_pos) -> None:
+        """Menu of bulk triage ops for the selected rows."""
+        rows = []
+        for job_id in job_ids:
+            try:
+                row = db.get_job(job_id, self.db_path)
+            except Exception:  # noqa: BLE001
+                row = None
+            if row:
+                rows.append(row)
+        if not rows:
+            return
+        menu = QMenu(self)
+        menu.addAction(f"{len(rows)} jobs selected").setEnabled(False)
+        menu.addSeparator()
+        for op, label in ja.MULTI_OP_LABELS:
+            count = sum(1 for r in rows if op in ja.ops_for_job(r))
+            act = menu.addAction(f"{label} ({count})")
+            act.setEnabled(count > 0)
+            act.triggered.connect(
+                lambda _checked=False, o=op, l=label:
+                self._run_op_on_selection(o, l))
+        menu.popup(global_pos)
+
+    def _run_op_on_selection(self, op: str, label: str) -> None:
+        """Apply ``op`` to every selected row and toast a summary."""
+        job_ids = self._table.selected_job_ids()
+        if not job_ids:
+            return
+        succeeded = failed = 0
+        for job_id in job_ids:
+            try:
+                if ja.apply_op(op, job_id, self.db_path):
+                    succeeded += 1
+                else:
+                    failed += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+        self.refresh()
+        message = f"{ja.op_past_tense(op)} {succeeded} job(s)"
+        if failed:
+            message += f" ({failed} skipped)"
+        self.status_bar.showMessage(message, 5000)
 
     def _on_filter_changed(self, *_args) -> None:
         """Search text or matches-only changed: reapply both filters and
