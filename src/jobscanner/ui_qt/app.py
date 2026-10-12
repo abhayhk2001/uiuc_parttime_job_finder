@@ -191,6 +191,10 @@ class JobScannerApp(QMainWindow):
         state = settings.value("window/state")
         if state is not None:
             self.restoreState(state)
+        # A scan may have left the log dock open when the window last
+        # closed; the saved state would bring it back empty, eating a
+        # quarter of the window. It only earns its space while a scan runs.
+        self.log_dock.hide()
         splitter_sizes = settings.value("window/splitter_sizes")
         if splitter_sizes is not None:
             try:
@@ -200,6 +204,8 @@ class JobScannerApp(QMainWindow):
 
         # Cmd-1 .. Cmd-9 jump between sections (the old UI's behavior).
         self._install_section_shortcuts()
+        # Esc clears the search box, as the README has always promised.
+        self._install_clear_search_shortcut()
 
         self.refresh()
 
@@ -617,6 +623,19 @@ class JobScannerApp(QMainWindow):
         for i, section in enumerate(db.COUNTED_SECTIONS[:9], start=1):
             QShortcut(QKeySequence(f"Ctrl+{i}"), self,
                       activated=lambda s=section: self.select_section(s))
+
+    def _install_clear_search_shortcut(self) -> None:
+        from PySide6.QtGui import QShortcut, QKeySequence
+
+        # Window-context: an open dialog consumes Esc itself, so this only
+        # fires while the main window owns the key.
+        QShortcut(QKeySequence("Esc"), self,
+                  activated=self._clear_search)
+
+    def _clear_search(self) -> None:
+        if not self._search_edit.text():
+            return
+        self._search_edit.clear()
 
     def _show_about(self) -> None:
         QMessageBox.about(

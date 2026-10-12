@@ -240,6 +240,48 @@ def test_copy_job_id_action_uses_clipboard() -> None:
            "Copy Job ID copies the selected id to the clipboard")
 
 
+def test_esc_clears_the_search_box() -> None:
+    """README: 'Esc -- Clear the search'. For a while it did nothing."""
+    from PySide6.QtTest import QTest
+
+    with gui_app() as (app, _path, _kw):
+        app._search_edit.setFocus()
+        app._search_edit.setText("python")
+        pump_events()
+        eq(app._search_edit.text(), "python", "search text set")
+
+        QTest.keyClick(app._search_edit, Qt.Key_Escape)
+        pump_events()
+        eq(app._search_edit.text(), "", "Esc clears the search box")
+
+
+def test_saved_state_cannot_resurrect_the_log_dock() -> None:
+    """Regression: a session that closed with the log dock open (a scan
+    ran) saved it that way, and restoreState() brought it back empty on
+    the next launch, eating a quarter of the window."""
+    from jobscanner.ui_qt.settings import app_settings
+
+    with gui_app() as (app, _path, _kw):
+        app.log_dock.show()
+        pump_events()
+        saved = app.saveState()
+    check(saved, "captured a saved window state")
+
+    settings = app_settings()
+    previous = settings.value("window/state")
+    settings.setValue("window/state", saved)
+    try:
+        with gui_app() as (app2, _path2, _kw2):
+            check(not app2.log_dock.isVisible(),
+                  "the log dock stays hidden even though the saved state "
+                  "had it open")
+    finally:
+        if previous is None:
+            settings.remove("window/state")
+        else:
+            settings.setValue("window/state", previous)
+
+
 if __name__ == "__main__":
     ok, reason = gui_available()
     _, failed, _ = run_module(globals(), "GUI interactions",
