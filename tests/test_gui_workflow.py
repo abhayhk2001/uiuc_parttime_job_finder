@@ -494,7 +494,7 @@ def test_multi_select_acts_on_every_selected_row() -> None:
         eq(set(app._table.selected_job_ids()), {"T0", "T2"},
            "both rows are selected")
 
-        app._run_op_on_selection(ja.OP_MARK_REVIEWED, "Mark Reviewed")
+        app._run_op_on_selection(ja.OP_MARK_REVIEWED)
         pump_events()
         check(bool(db.get_job("T0", path)["reviewed"]), "first row reviewed")
         check(bool(db.get_job("T2", path)["reviewed"]), "second row reviewed")

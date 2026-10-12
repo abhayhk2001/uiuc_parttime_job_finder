@@ -579,11 +579,10 @@ class JobScannerApp(QMainWindow):
             act = menu.addAction(f"{label} ({count})")
             act.setEnabled(count > 0)
             act.triggered.connect(
-                lambda _checked=False, o=op, l=label:
-                self._run_op_on_selection(o, l))
+                lambda _checked=False, o=op: self._run_op_on_selection(o))
         menu.popup(global_pos)
 
-    def _run_op_on_selection(self, op: str, label: str) -> None:
+    def _run_op_on_selection(self, op: str) -> None:
         """Apply ``op`` to every selected row and toast a summary."""
         job_ids = self._table.selected_job_ids()
         if not job_ids:
