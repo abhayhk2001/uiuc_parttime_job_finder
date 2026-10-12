@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QMenu
+from PySide6.QtWidgets import QMenu
 
 from support import check, eq, gui_app, gui_available, pump_events, run_module  # noqa: E402
 
