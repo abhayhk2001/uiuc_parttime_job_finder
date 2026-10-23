@@ -19,13 +19,19 @@ recent 21:00 boundary:
 
 A failed scan never writes the marker, so it retries at the next
 wake/reboot until one succeeds for the current slot.
+
+This module also holds the small helpers the nightly entry point uses:
+a DNS probe to wait out a network that is not up yet after a wake, and
+locating the enclosing ``.app`` bundle so the GUI can be opened as its
+own process.
 """
 
 from __future__ import annotations
 
+import socket
 from datetime import datetime, time, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from jobscanner import paths
 
@@ -34,6 +40,15 @@ BOUNDARY_HOUR = 21
 
 #: Marker filename inside the per-user data directory.
 MARKER_NAME = ".last_nightly_scan"
+
+#: Host resolved to decide whether the network is up (all sources are
+#: illinois.edu subdomains).
+NETWORK_PROBE_HOST = "illinois.edu"
+
+#: Scan attempts per scheduled run, and the pause between them. Covers
+#: the window right after a wake when Wi-Fi/DNS is not back yet.
+SCAN_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 30
 
 
 def marker_path() -> Path:
@@ -80,3 +95,29 @@ def mark_run(marker: Optional[Path] = None,
     now = now or datetime.now().astimezone()
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(f"{now.timestamp():.0f}\n")
+
+
+def network_up(host: str = NETWORK_PROBE_HOST,
+               resolve: Callable[..., object] = socket.getaddrinfo) -> bool:
+    """True when ``host`` resolves, i.e. DNS (and so the network) is up."""
+    try:
+        resolve(host, 443)
+    except OSError:  # socket.gaierror is an OSError
+        return False
+    return True
+
+
+def app_bundle(executable: "str | Path") -> Optional[Path]:
+    """The enclosing ``*.app`` for a binary at ``X.app/Contents/MacOS/X``.
+
+    Returns None when ``executable`` is not inside a macOS app bundle
+    (e.g. a plain Python interpreter running from source).
+    """
+    exe = Path(executable).resolve()
+    macos = exe.parent
+    contents = macos.parent
+    bundle = contents.parent
+    if (macos.name == "MacOS" and contents.name == "Contents"
+            and bundle.suffix == ".app"):
+        return bundle
+    return None

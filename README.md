@@ -300,7 +300,12 @@ launchctl kickstart -k gui/$(id -u)/edu.illinois.jobscanner.nightly
 
 The agent runs the *built* `.app` with `--scan-and-open`: it scans every
 source into the same AppData database the app uses, then opens the GUI
-with fresh results. Scan output is logged to
+with fresh results. The GUI is opened as a separate process (via
+`/usr/bin/open`), so the scheduled job exits right after the scan and a
+window left open never blocks the next night's run; if the app is already
+open, it is just brought to the front. If the network is not up yet (e.g.
+right after a wake), the scan retries up to 3 times, 30 s apart, before
+giving up until the next wake/reboot. Scan output is logged to
 `~/Library/Application Support/UIUC Part-Time Job Scanner/scanner-nightly.log`.
 
 Rebuilding the app (`./build-mac.sh`) never breaks the schedule — the
