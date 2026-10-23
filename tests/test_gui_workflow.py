@@ -589,6 +589,76 @@ def test_scan_ui_toggles_button_progress_and_bulk() -> None:
               "the bulk block unlocks when the scan ends")
 
 
+def test_applied_menu_offers_snooze_and_remove() -> None:
+    from PySide6.QtWidgets import QMenu
+
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T2", path)
+        app._show_job_menu("T2", app.mapToGlobal(app.rect().center()))
+        pump_events()
+        menu = [m for m in app.findChildren(QMenu) if m.isVisible()][-1]
+        by_label = {a.text(): a for a in menu.actions() if a.text()}
+        check("Follow Up in 5 Days" in by_label, f"snooze offered ({list(by_label)})")
+        check("Remove from Follow-up List" in by_label, "remove offered")
+        menu.close()
+
+
+def test_follow_up_ops_through_the_state_machine() -> None:
+    with gui_app() as (_app, path, _kw):
+        db.mark_applied("T2", path)
+        db.set_follow_up("T2", "2020-01-01T00:00:00+00:00", path)
+        job = db.get_job("T2", path)
+        ops = ja.ops_for_job(job)
+        check(ja.OP_FOLLOW_UP_SOON in ops and ja.OP_REMOVE_FOLLOW_UP in ops,
+              "an applied job with a date offers both ops")
+
+        ja.apply_op(ja.OP_FOLLOW_UP_SOON, "T2", path)
+        check(db.get_job("T2", path)["follow_up_at"] > "2020-02-01",
+              "snooze pushed the date out")
+
+        ja.apply_op(ja.OP_REMOVE_FOLLOW_UP, "T2", path)
+        job = db.get_job("T2", path)
+        eq(job["follow_up_at"], None, "remove cleared the date")
+        check(ja.OP_REMOVE_FOLLOW_UP not in ja.ops_for_job(job),
+              "nothing left to remove")
+        check(ja.OP_FOLLOW_UP_SOON in ja.ops_for_job(job),
+              "but it can still be given a new date")
+
+
+def test_follow_up_alerts_dialog_actions_drop_rows() -> None:
+    from jobscanner.ui_qt.dialogs.follow_up_alerts import FollowUpAlertsDialog
+
+    with gui_app() as (app, path, _kw):
+        for jid in ("T4", "T5"):
+            db.mark_applied(jid, path)
+            db.set_follow_up(jid, "2020-01-01T00:00:00+00:00", path)
+        dialog = FollowUpAlertsDialog(app, db.get_follow_up_alerts(path))
+        seen = []
+        dialog.actionRequested.connect(lambda j, o: seen.append((j, o)))
+        dialog.show()
+        pump_events()
+        eq(dialog._list.count(), 2, "two alerts listed")
+
+        dialog._soon_btn.click()
+        eq(dialog._list.count(), 1, "the actioned row leaves the list")
+        eq(seen[0][1], ja.OP_FOLLOW_UP_SOON, "snooze op requested")
+        check("1 applied job " in dialog._subtitle.text(),
+              f"count updated ({dialog._subtitle.text()!r})")
+
+        dialog._remove_btn.click()
+        eq(seen[1][1], ja.OP_REMOVE_FOLLOW_UP, "remove op requested")
+        check(not dialog.isVisible(), "dialog closes when the list empties")
+
+
+def test_alert_action_updates_the_database() -> None:
+    with gui_app() as (app, path, _kw):
+        db.mark_applied("T4", path)
+        db.set_follow_up("T4", "2020-01-01T00:00:00+00:00", path)
+        app._on_alert_action("T4", ja.OP_REMOVE_FOLLOW_UP)
+        eq(db.get_job("T4", path)["follow_up_at"], None, "date cleared")
+        eq(db.get_follow_up_alerts(path), [], "no alert remains")
+
+
 if __name__ == "__main__":
     ok, reason = gui_available()
     _, failed, _ = run_module(globals(), "GUI workflow",

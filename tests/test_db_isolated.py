@@ -802,6 +802,47 @@ def test_defaulted_calls_follow_config_db_path() -> None:
             "and it landed in the redirected database")
 
 
+def test_clear_follow_up_dismisses_the_alert_but_keeps_the_job_applied() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        for jid in ("CF1", "CF2"):
+            db.upsert_listing(_listing(jid, jid), p)
+        db.mark_applied("CF1", p)
+        db.set_follow_up("CF1", "2020-01-01T00:00:00+00:00", p)
+        db.mark_applied("CF2", p)
+        with sqlite3.connect(p) as conn:
+            conn.execute(
+                "UPDATE jobs SET archived = 1, auto_archived = 1, "
+                "archived_at = '2026-01-01T00:00:00+00:00' "
+                "WHERE job_id = 'CF2'")
+            conn.commit()
+        _eq(sorted(r["job_id"] for r in db.get_follow_up_alerts(p)),
+            ["CF1", "CF2"], "both alert before being removed")
+
+        db.clear_follow_up("CF1", p)
+        db.clear_follow_up("CF2", p)
+
+        _eq(db.get_follow_up_alerts(p), [], "neither alerts any more")
+        row = db.get_job("CF1", p)
+        _eq(row["follow_up_at"], None, "the date is cleared")
+        _check(bool(row["applied_at"]), "the job stays applied")
+        _eq(db.get_section_counts(p)["follow_up"], 1,
+            "and stays in the Applied section")
+
+
+def test_follow_up_in_five_days_sets_the_date() -> None:
+    with _TempDB() as p:
+        db.init_db(p)
+        db.upsert_listing(_listing("F5", "F5"), p)
+        db.mark_applied("F5", p)
+        db.mark_further_follow_up("F5", days=config.FOLLOW_UP_SNOOZE_DAYS, path=p)
+        due = datetime.fromisoformat(db.get_job("F5", p)["follow_up_at"])
+        delta = due - datetime.now(timezone.utc)
+        _check(timedelta(days=4, hours=23) < delta < timedelta(days=5, hours=1),
+               f"follow-up is about 5 days out ({delta})")
+        _eq(config.FOLLOW_UP_SNOOZE_DAYS, 5, "the snooze is five days")
+
+
 if __name__ == "__main__":
     _, failed, _ = run_module(globals(), "Storage layer")
     sys.exit(1 if failed else 0)

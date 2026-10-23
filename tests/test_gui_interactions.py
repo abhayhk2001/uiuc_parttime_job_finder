@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QModelIndex, Qt
 from PySide6.QtWidgets import QMenu
 
 from support import check, eq, gui_app, gui_available, pump_events, run_module  # noqa: E402
@@ -370,6 +370,11 @@ def test_triage_shortcuts_run_the_detail_pane_actions() -> None:
     with gui_app() as (app, path, _kw):
         app.select_section(db.SECTION_NEW)
         pump_events()
+        check(app.actions.job_primary.isEnabled(),
+              "opening a section selects its first job")
+        app._table.setCurrentIndex(QModelIndex())
+        app._table.clearSelection()
+        pump_events()
         check(not app.actions.job_primary.isEnabled(),
               "primary triage shortcut disabled with nothing selected")
 
@@ -406,6 +411,26 @@ def test_sidebar_rows_hint_at_their_shortcuts() -> None:
               f"{db.SECTION_LABELS[first_key]} \u2014 {ACCEL}-1",
               f"the first section's tooltip names its shortcut "
               f"({hints.get(first_key)!r})")
+
+
+def test_switching_section_selects_the_first_job() -> None:
+    with gui_app() as (app, _path, _kw):
+        app.select_section(db.SECTION_NEW)
+        pump_events()
+        first = app._table.visible_job_ids()[0]
+        eq(app._table.selected_id(), first, "first job is selected")
+        check(app.detail.job_id == first, "and shown in the detail pane")
+
+        app._table.setCurrentIndex(QModelIndex())
+        app._table.clearSelection()
+        app.select_section(db.SECTION_ALL)
+        pump_events()
+        eq(app._table.selected_id(), app._table.visible_job_ids()[0],
+           "switching again re-selects the first job")
+
+        app.select_section(db.SECTION_ARCHIVED)  # empty in the seed data
+        pump_events()
+        check(app._table.selected_id() is None, "an empty section selects nothing")
 
 
 if __name__ == "__main__":

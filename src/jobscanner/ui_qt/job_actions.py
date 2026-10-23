@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from jobscanner import config
 from jobscanner import storage as db
 
 
@@ -33,6 +34,8 @@ OP_ADD_TO_APPLY = "add_to_apply"
 OP_REMOVE_TO_APPLY = "remove_to_apply"
 OP_ARCHIVE = "archive"
 OP_MARK_NOT_APPLIED = "mark_not_applied"
+OP_FOLLOW_UP_SOON = "follow_up_soon"
+OP_REMOVE_FOLLOW_UP = "remove_follow_up"
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,11 @@ def apply_op(op: Optional[str], job_id: str, path: Path) -> bool:
         db.archive_job(job_id, path)
     elif op == OP_MARK_NOT_APPLIED:
         db.mark_not_applied(job_id, path)
+    elif op == OP_FOLLOW_UP_SOON:
+        db.mark_further_follow_up(
+            job_id, days=config.FOLLOW_UP_SNOOZE_DAYS, path=path)
+    elif op == OP_REMOVE_FOLLOW_UP:
+        db.clear_follow_up(job_id, path)
     else:
         raise ValueError(f"Unknown job operation: {op!r}")
     return True
@@ -140,6 +148,8 @@ _OP_TOASTS: dict[str, str] = {
     OP_REMOVE_TO_APPLY: "Removed from To Apply",
     OP_ARCHIVE: "Archived",
     OP_MARK_NOT_APPLIED: "Marked not applied",
+    OP_FOLLOW_UP_SOON: f"Follow up in {config.FOLLOW_UP_SNOOZE_DAYS} days",
+    OP_REMOVE_FOLLOW_UP: "Removed from follow-up list",
 }
 
 
@@ -172,6 +182,11 @@ def ops_for_job(job: Optional[dict]) -> set[str]:
             ops.add(spec.op)
     if state.applied:
         ops.add(OP_MARK_NOT_APPLIED)
+        ops.add(OP_FOLLOW_UP_SOON)
+        # Nothing to remove once the date is cleared and the job isn't an
+        # auto-archive alert.
+        if job and (job.get("follow_up_at") or job.get("auto_archived")):
+            ops.add(OP_REMOVE_FOLLOW_UP)
     return ops
 
 
@@ -185,5 +200,8 @@ MULTI_OP_LABELS: tuple[tuple[str, str], ...] = (
     (OP_ARCHIVE, "Archive"),
     (OP_UNARCHIVE, "Unarchive"),
     (OP_FURTHER_FOLLOW_UP, "Mark Further Follow Up"),
+    (OP_FOLLOW_UP_SOON,
+     f"Follow Up in {config.FOLLOW_UP_SNOOZE_DAYS} Days"),
+    (OP_REMOVE_FOLLOW_UP, "Remove from Follow-up List"),
     (OP_MARK_NOT_APPLIED, "Mark Not Applied"),
 )

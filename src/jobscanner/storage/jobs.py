@@ -265,6 +265,26 @@ def mark_further_follow_up(
         conn.commit()
 
 
+def clear_follow_up(
+    job_id: str,
+    path: Optional[Path] = None,
+) -> None:
+    """Take a job off the follow-up list without un-applying it.
+
+    Clears `follow_up_at`, so it never shows in the startup alerts, and
+    `auto_archived`, which dismisses the "no longer listed" alert for a job
+    the scanner archived. Like `archive_job`, that makes the archive the
+    user's own: a later scan that still lists the job won't restore it.
+    """
+    with connect(path) as conn:
+        conn.execute(
+            "UPDATE jobs SET follow_up_at = NULL, auto_archived = 0 "
+            "WHERE job_id = ?",
+            (job_id,),
+        )
+        conn.commit()
+
+
 def archive_job(
     job_id: str,
     path: Optional[Path] = None,

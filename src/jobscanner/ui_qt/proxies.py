@@ -76,6 +76,13 @@ class JobsFilterProxy(QSortFilterProxyModel):
                 return f"{group.label}  ({count})"
         return super().data(index, role)
 
+    def flags(self, index: QModelIndex):
+        """Section headings can be clicked and toggled, but never selected."""
+        flags = super().flags(index)
+        if index.isValid() and not index.parent().isValid():
+            flags &= ~Qt.ItemIsSelectable
+        return flags
+
     # -- internals -------------------------------------------------------
 
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:  # noqa: N802

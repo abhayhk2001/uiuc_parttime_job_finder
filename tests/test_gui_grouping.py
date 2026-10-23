@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt
 
 from support import (  # noqa: E402
     check, eq, gui_available, pump_events, qt_only, run_module,
@@ -246,6 +246,64 @@ def test_empty_model_is_safe() -> None:
         eq(view.proxy().rowCount(), 0, "no sections")
         eq(view.visible_job_ids(), [], "no jobs")
         check(view.source_model().group_at(0) is None, "no group at 0")
+
+
+def test_headings_are_not_selectable() -> None:
+    with qt_only():
+        view = _view()
+        heading = view.proxy().index(0, 0)
+        check(not (view.proxy().flags(heading) & Qt.ItemIsSelectable),
+              "a heading is not selectable")
+        child = view.proxy().index(0, 0, heading)
+        check(bool(view.proxy().flags(child) & Qt.ItemIsSelectable),
+              "a job row still is")
+        view.selectionModel().select(heading, QItemSelectionModel.ClearAndSelect)
+        check(not view.selectionModel().selectedIndexes(),
+              "selecting a heading selects nothing")
+
+
+def test_arrow_keys_step_over_headings() -> None:
+    from PySide6.QtTest import QTest
+
+    with qt_only():
+        view = _view()
+        view.setFocus()
+        eq(view.visible_group_keys(), ["vjb", "rp", "ach"], "three sections")
+        jobs = view.visible_job_ids()
+        view.select_id(jobs[0])
+        landed = [view.selected_id()]
+        for _ in range(len(jobs) - 1):
+            QTest.keyClick(view, Qt.Key_Down)
+            pump_events()
+            landed.append(view.selected_id())
+            check(landed[-1] is not None, "Down never lands on a heading")
+        eq(landed, jobs, "Down walks every job, crossing section boundaries")
+        QTest.keyClick(view, Qt.Key_Down)
+        eq(view.selected_id(), jobs[-1], "Down at the end stays put")
+        for expected in reversed(jobs[:-1]):
+            QTest.keyClick(view, Qt.Key_Up)
+            pump_events()
+            eq(view.selected_id(), expected, "Up steps back one job")
+        QTest.keyClick(view, Qt.Key_End)
+        eq(view.selected_id(), jobs[-1], "End goes to the last job")
+        QTest.keyClick(view, Qt.Key_Home)
+        eq(view.selected_id(), jobs[0], "Home goes to the first job")
+
+
+def test_clicking_a_heading_keeps_the_selected_job() -> None:
+    from PySide6.QtTest import QTest
+
+    with qt_only():
+        view = _view()
+        jobs = view.visible_job_ids()
+        view.select_id(jobs[1])
+        pump_events()
+        rect = view.visualRect(view.proxy().index(0, 0))
+        QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                         rect.center())
+        pump_events()
+        eq(view.selected_id(), jobs[1],
+           "clicking a heading leaves the selected job alone")
 
 
 if __name__ == "__main__":

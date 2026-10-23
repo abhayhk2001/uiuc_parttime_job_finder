@@ -31,6 +31,9 @@ MAX_RETRIES = 3
 # default `follow_up_at = applied_at + FOLLOW_UP_WINDOW_DAYS`.
 FOLLOW_UP_WINDOW_DAYS = 7
 
+# The "Follow up in 5 days" quick action in the follow-up alerts and menus.
+FOLLOW_UP_SNOOZE_DAYS = 5
+
 def _accept_encoding() -> str:
     """Advertise only the encodings this install can actually decode.
 

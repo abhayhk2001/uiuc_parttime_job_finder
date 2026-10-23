@@ -291,23 +291,47 @@ class JobsTableView(QTreeView):
 
     # -- internals -------------------------------------------------------
 
-    def selectionCommand(self, index: QModelIndex,
-                         event) -> QItemSelectionModel.SelectionFlags:
-        """A Ctrl/Shift-click on a section heading must not select it.
+    def _shown_job_indexes(self) -> list[QModelIndex]:
+        """Proxy index of every job row the user can see (expanded groups)."""
+        out: list[QModelIndex] = []
+        for g in range(self._proxy.rowCount()):
+            group = self._proxy.index(g, 0)
+            if not self.isExpanded(group):
+                continue
+            out.extend(self._proxy.index(r, 0, group)
+                       for r in range(self._proxy.rowCount(group)))
+        return out
 
-        Headings are not jobs; letting a range-selection sweep one in would
-        only confuse the multi-select menu, which counts jobs.
+    def moveCursor(self, action, modifiers):  # noqa: N802
+        """Vertical keys move between jobs and step over section headings.
+
+        Headings aren't selectable, so the cursor must never rest on one.
+        Left/Right and the rest keep Qt's behaviour.
         """
-        if index.isValid() and not index.parent().isValid():
-            modifiers = Qt.KeyboardModifiers()
-            if event is not None:
-                try:
-                    modifiers = event.modifiers()
-                except AttributeError:
-                    pass
-            if modifiers & (Qt.ControlModifier | Qt.ShiftModifier):
-                return QItemSelectionModel.NoUpdate
-        return super().selectionCommand(index, event)
+        A = QAbstractItemView.CursorAction
+        if action not in (A.MoveUp, A.MoveDown, A.MovePageUp, A.MovePageDown,
+                          A.MoveHome, A.MoveEnd):
+            return super().moveCursor(action, modifiers)
+        jobs = self._shown_job_indexes()
+        if not jobs:
+            return QModelIndex()
+        current = self.currentIndex()
+        pos = next((i for i, idx in enumerate(jobs)
+                    if current.isValid() and idx.row() == current.row()
+                    and idx.parent() == current.parent()), None)
+        page = max(1, self.viewport().height()
+                   // max(1, self.sizeHintForRow(0)) - 1)
+        step = {A.MoveUp: -1, A.MoveDown: 1,
+                A.MovePageUp: -page, A.MovePageDown: page}.get(action)
+        if action == A.MoveHome:
+            target = 0
+        elif action == A.MoveEnd:
+            target = len(jobs) - 1
+        elif pos is None:
+            target = 0 if step > 0 else len(jobs) - 1
+        else:
+            target = pos + step
+        return jobs[max(0, min(target, len(jobs) - 1))]
 
     def _on_current_row_changed(self, current, _previous) -> None:
         if not current.isValid():

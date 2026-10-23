@@ -324,6 +324,8 @@ class JobScannerApp(QMainWindow):
         self._table.apply_default_sort(
             keep_db_order=db.SECTIONS_BY_KEY[section].has_own_order)
         self.refresh()
+        # Land on the first job so the detail pane is never left empty.
+        self._table.select_visible_index(0)
 
     # -- bulk actions ----------------------------------------------------
 
@@ -410,7 +412,18 @@ class JobScannerApp(QMainWindow):
             return
         dialog = FollowUpAlertsDialog(self, jobs)
         dialog.jumpRequested.connect(self._jump_to_job)
+        dialog.actionRequested.connect(self._on_alert_action)
         dialog.exec()
+
+    def _on_alert_action(self, job_id: str, op: str) -> None:
+        try:
+            ja.apply_op(op, job_id, self.db_path)
+            job = db.get_job(job_id, self.db_path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Update failed", str(exc))
+            return
+        self.status_bar.showMessage(ja.describe_op(op, job), 4000)
+        self.refresh()
 
     def _jump_to_job(self, job_id: str) -> None:
         try:
@@ -550,6 +563,15 @@ class JobScannerApp(QMainWindow):
             act.triggered.connect(lambda _checked=False, op=spec.op: self._run_job_op(op))
         if state.applied:
             menu.addAction("Edit Follow-up Date\u2026", self._open_follow_up_editor)
+            ops = ja.ops_for_job(job)
+            for op, label in ((ja.OP_FOLLOW_UP_SOON,
+                               f"Follow Up in {config.FOLLOW_UP_SNOOZE_DAYS} Days"),
+                              (ja.OP_REMOVE_FOLLOW_UP,
+                               "Remove from Follow-up List")):
+                act = menu.addAction(label)
+                act.setEnabled(op in ops)
+                act.triggered.connect(
+                    lambda _checked=False, o=op: self._run_job_op(o))
             act = menu.addAction("Mark Not Applied")
             act.triggered.connect(
                 lambda _checked=False: self._run_job_op(ja.OP_MARK_NOT_APPLIED))

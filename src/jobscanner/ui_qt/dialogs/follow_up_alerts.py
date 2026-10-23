@@ -19,7 +19,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from jobscanner import config
 from jobscanner.timeutils import local_date_str, relative_days
+from jobscanner.ui_qt import job_actions as ja
 from jobscanner.ui_qt import theme
 
 
@@ -27,6 +29,9 @@ class FollowUpAlertsDialog(QDialog):
     """Lists applied jobs that need follow-up attention."""
 
     jumpRequested = Signal(str)
+    #: ``(job_id, op)`` -- the owner applies the op; the dialog only drops
+    #: the row, so it stays free of database access.
+    actionRequested = Signal(str, str)
 
     def __init__(self, parent, jobs: list[dict]) -> None:
         super().__init__(parent)
@@ -49,12 +54,10 @@ class FollowUpAlertsDialog(QDialog):
         layout.addWidget(title)
 
         count = len(jobs)
-        subtitle = QLabel(
-            f"{count} applied job{'s' if count != 1 else ''} need attention.",
-            self,
-        )
+        subtitle = QLabel("", self)
         subtitle.setStyleSheet(f"color: {theme.current_palette()['muted']};")
         layout.addWidget(subtitle)
+        self._subtitle = subtitle
 
         self._list = QListWidget(self)
         self._list.setSelectionMode(QListWidget.SingleSelection)
@@ -68,6 +71,17 @@ class FollowUpAlertsDialog(QDialog):
         layout.addWidget(self._list, 1)
 
         bar = QHBoxLayout()
+        self._soon_btn = QPushButton(
+            f"Follow up in {config.FOLLOW_UP_SNOOZE_DAYS} days", self)
+        self._soon_btn.clicked.connect(
+            lambda: self._act(ja.OP_FOLLOW_UP_SOON))
+        bar.addWidget(self._soon_btn)
+        self._remove_btn = QPushButton("Remove", self)
+        self._remove_btn.setToolTip(
+            "Take this job off the follow-up list. It stays in Applied.")
+        self._remove_btn.clicked.connect(
+            lambda: self._act(ja.OP_REMOVE_FOLLOW_UP))
+        bar.addWidget(self._remove_btn)
         bar.addStretch(1)
         self._open_btn = QPushButton("Open in Browser", self)
         self._open_btn.clicked.connect(self._open_in_browser)
@@ -83,6 +97,27 @@ class FollowUpAlertsDialog(QDialog):
 
         if self._list.count():
             self._list.setCurrentRow(0)
+        self._sync_state()
+
+    def _sync_state(self) -> None:
+        count = self._list.count()
+        self._subtitle.setText(
+            f"{count} applied job{'s' if count != 1 else ''} need attention.")
+        for btn in (self._soon_btn, self._remove_btn, self._go_btn,
+                    self._open_btn):
+            btn.setEnabled(count > 0)
+
+    def _act(self, op: str) -> None:
+        row = self._list.currentRow()
+        item = self._list.item(row)
+        if item is None:
+            return
+        job_id = item.data(Qt.UserRole)
+        self._list.takeItem(row)
+        self._sync_state()
+        self.actionRequested.emit(job_id, op)
+        if self._list.count() == 0:
+            self.accept()
 
     @staticmethod
     def _item_text(job: dict) -> str:
