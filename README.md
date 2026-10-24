@@ -10,8 +10,9 @@ A lightweight Python tool that crawls several UIUC job boards, mirrors every pos
 | [Research Park](https://researchpark.illinois.edu/work-here/careers/) | `rp` | The whole job board, all employment types | Full text from the page's JSON-LD |
 | [Assistantship Clearinghouse](https://grad.illinois.edu/funding/assistantships/assistantship-clearinghouse) | `ach` | Graduate assistantships | Listing teaser only |
 | [University Library](https://www.library.illinois.edu/libinfo/about/library-employment/) | `lib` | Academic hourly, graduate assistantships, graduate hourly | Listing text only |
+| [HES Student Portal](https://web.housing.illinois.edu/HESStudentPortal/MyHES) | `hes` | Housing student-employment openings (**needs a saved NetID login**) | Full text from each posting's "More Details" |
 
-Notes on the newer three:
+Notes on the newer sources:
 
 - **Research Park** serves no listings in its HTML — it is WP Job Manager loading
   over AJAX, so the scanner calls the plugin's `get_listings` endpoint directly.
@@ -25,6 +26,17 @@ Notes on the newer three:
   produces. It had no populated page to be written against, so when it finds
   content it cannot parse it says so loudly on stderr rather than importing
   nothing silently.
+
+- **HES** sits behind Illinois NetID single sign-on with MFA, so it can't be
+  scraped with plain requests. Sign in once with `jobscanner --hes-login` (from
+  the built app: `"UIUC Part-Time Job Scanner" --hes-login`); this opens a browser
+  window, and the session cookies are saved to `hes_state.json` in the data
+  directory (never committed, mode 600). Scans then replay them in a headless
+  browser. When the portal expires the session the HES row of the scan summary
+  reads "HES login expired or missing -- run: jobscanner --hes-login", nothing is
+  archived, and the other sources are unaffected. It uses Playwright with your
+  installed Chrome, falling back to Chromium (`playwright install chromium`).
+  The built app does not bundle a browser.
 
 Each source is scanned independently: one board failing is logged and skipped, and
 never archives its own jobs on evidence it did not gather. Adding a source means
@@ -374,7 +386,7 @@ Created automatically; idempotent migrations add the `reviewed` and `to_apply` c
 | Column            | Type | Notes                                            |
 | ----------------- | ---- | ------------------------------------------------ |
 | `job_id`          | TEXT | Primary key, namespaced as `<source>:<native id>` (e.g. `vjb:48447`, `rp:hardware-fpga-engineer`). Bare ids from before multi-source support are migrated on first run. |
-| `source`          | TEXT | Which board the row came from: `vjb` / `rp` / `ach` / `lib`. |
+| `source`          | TEXT | Which board the row came from: `vjb` / `rp` / `ach` / `lib` / `hes`. |
 | `title`           | TEXT |                                                  |
 | `company`         | TEXT |                                                  |
 | `date_posted`     | TEXT |                                                  |
@@ -551,7 +563,7 @@ JOBSCANNER_DATA_DIR="$HOME/Library/Application Support/UIUC Part-Time Job Scanne
 
 ## Notes
 
-- Site is ASP.NET WebForms (server-rendered). No headless browser needed.
+- The Virtual Job Board is ASP.NET WebForms (server-rendered) and needs no headless browser; only the HES source drives one (Playwright).
 - `scraper/session.py` uses a polite 1 s delay between requests — see `config.REQUEST_DELAY_SECONDS`.
 - The bot is structured so a future WhatsApp alerter can replace `alerts.py`'s `alert()` body without touching the rest of the code.
 - Matching is intentionally simple: each keyword is a case-insensitive whole-word match. `python` matches `Python Developer` but not `pythonic`, and keywords that begin or end with a symbol (`C++`, `C#`, `.NET`) work. Overlapping keywords (`data` and `data science`) are each reported.

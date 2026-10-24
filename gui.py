@@ -114,6 +114,10 @@ def _run_nightly_scan() -> int:
 
 
 if __name__ == "__main__":
+    if "--hes-login" in sys.argv:
+        from jobscanner import hes_session
+
+        sys.exit(hes_session.login())
     if "--scan-and-open" in sys.argv:
         sys.exit(_run_nightly_scan())
     _launch_gui()

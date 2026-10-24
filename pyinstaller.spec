@@ -19,6 +19,8 @@ import os
 import shutil
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files
+
 APP_NAME = "UIUC Part-Time Job Scanner"
 ENTRY = Path("gui.py").resolve()
 # Spec files don't expose __file__ at the top level; fall back to cwd,
@@ -65,8 +67,10 @@ a = Analysis(
     # Ship the default keyword list inside the bundle. jobscanner.paths
     # looks for it at sys._MEIPASS/keywords.json and copies it into the
     # user's AppData directory on first launch.
-    datas=[(str(REPO_ROOT / "keywords.json"), ".")],
-    hiddenimports=[],
+    datas=[(str(REPO_ROOT / "keywords.json"), ".")] + collect_data_files("playwright"),
+    # Imported lazily inside jobscanner.hes_session; name it so the HES
+    # source works in the bundle. Browsers are NOT bundled (see hes_session).
+    hiddenimports=["playwright.sync_api"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

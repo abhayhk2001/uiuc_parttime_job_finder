@@ -18,7 +18,8 @@ from pathlib import Path
 from support import REPO_ROOT, check, eq, run_module  # noqa: E402
 
 from jobscanner.sources import SOURCES, SOURCES_BY_KEY  # noqa: E402
-from jobscanner.sources import clearinghouse, library, research_park  # noqa: E402
+from jobscanner.sources import clearinghouse, hes, library, research_park  # noqa: E402
+from jobscanner.sources.base import ListingParseError  # noqa: E402
 from jobscanner.sources.base import ListingRow, slugify  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -35,7 +36,7 @@ def _fixture(name: str) -> str:
 def test_registry_keys_are_unique_and_stable() -> None:
     keys = [s.key for s in SOURCES]
     eq(len(keys), len(set(keys)), "source keys must be unique")
-    eq(set(keys), {"vjb", "rp", "ach", "lib"}, "expected four sources")
+    eq(set(keys), {"vjb", "rp", "ach", "lib", "hes"}, "expected five sources")
     for source in SOURCES:
         check(bool(source.label), f"{source.key} needs a label")
         if source.supports_detail:
@@ -44,7 +45,7 @@ def test_registry_keys_are_unique_and_stable() -> None:
 
 
 def test_listing_only_sources_declare_no_detail() -> None:
-    for key in ("ach", "lib"):
+    for key in ("ach", "lib", "hes"):
         check(not SOURCES_BY_KEY[key].supports_detail,
               f"{key} is listing-only: its detail pages are not public")
 
@@ -328,6 +329,55 @@ def test_library_ids_are_stable_for_the_same_title() -> None:
     eq(a[0].job_id("lib"),
        "lib:graduate-hourly-positions-circulation-desk-assistant",
        "id is derived from page and title")
+
+
+# ---------------------------------------------------------------------------
+# HES Student Portal
+# ---------------------------------------------------------------------------
+
+def test_hes_parses_every_position() -> None:
+    rows = hes.parse_listing(_fixture("hes_jobs.html"))
+    eq(len(rows), 8, "the captured portal page lists eight positions")
+    by_id = {r.native_id: r for r in rows}
+    eq(set(by_id), {"311", "2", "22", "1", "397", "405", "4", "7"},
+       "native ids come from the ApplyNow/<id> links")
+    nettech = by_id["7"]
+    eq(nettech.title, "Student Network Technician (NetTech)", "title")
+    eq(nettech.date_posted, "2026-10-14", "start date is ISO")
+    eq(nettech.extra["end_date"], "2026-10-31", "end date kept in extra")
+    eq(nettech.job_id("hes"), "hes:7", "namespaced job id")
+    check(nettech.detail_url.endswith("/HESStudentPortal/Application/ApplyNow/7"),
+          "detail_url is the absolute apply link")
+    check("Posting open through: 2026-10-31" in nettech.teaser,
+          "the closing date is folded into the description")
+
+
+def test_hes_uses_modal_text_over_the_short_blurb() -> None:
+    rows = {r.native_id: r for r in hes.parse_listing(_fixture("hes_jobs.html"))}
+    check(all(len(r.teaser) > 100 for r in rows.values()),
+          "every posting should carry real description text")
+
+
+def test_hes_login_page_is_a_parse_error_not_an_empty_board() -> None:
+    try:
+        hes.parse_listing("<html><body><form action='/idp/profile/SAML2'>"
+                          "NetID Login</form></body></html>")
+    except ListingParseError:
+        return
+    check(False, "a page without #positionDisplay must raise")
+
+
+def test_hes_empty_container_is_an_empty_listing() -> None:
+    eq(hes.parse_listing('<div id="positionDisplay"></div>'), [],
+       "container present but no postings is an empty board")
+
+
+def test_hes_url_recognition() -> None:
+    from jobscanner import hes_session
+    check(hes_session.is_portal_url(hes_session.PORTAL_URL), "portal url")
+    check(not hes_session.is_portal_url(
+        "https://shibboleth.illinois.edu/idp/profile/SAML2/Redirect/SSO"),
+        "SSO host is not the portal")
 
 
 def test_slugify_is_url_safe() -> None:

@@ -62,6 +62,20 @@ def user_db_path() -> Path:
     return user_data_dir() / "jobs.db"
 
 
+def hes_profile_dir() -> Path:
+    """Persistent browser profile holding the HES portal login session.
+
+    It contains session cookies, so it stays in the user data dir and out
+    of git (see .gitignore).
+    """
+    return user_data_dir() / "hes_profile"
+
+
+def hes_state_path() -> Path:
+    """Saved HES cookies, session-only ones included (see hes_session)."""
+    return user_data_dir() / "hes_state.json"
+
+
 def user_keywords_path() -> Path:
     """The editable keywords.json the GUI reads and writes.
 

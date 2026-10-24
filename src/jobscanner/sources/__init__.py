@@ -7,13 +7,14 @@ nothing in storage, matching or the UI needs to know about it.
 from __future__ import annotations
 
 from jobscanner.sources.base import Detail, ListingRow, Source
-from jobscanner.sources import clearinghouse, library, research_park, vjb
+from jobscanner.sources import clearinghouse, hes, library, research_park, vjb
 
 SOURCES: tuple[Source, ...] = (
     vjb.SOURCE,
     research_park.SOURCE,
     clearinghouse.SOURCE,
     library.SOURCE,
+    hes.SOURCE,
 )
 
 SOURCES_BY_KEY: dict[str, Source] = {s.key: s for s in SOURCES}

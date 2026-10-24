@@ -62,6 +62,9 @@ def main() -> int:
     p.add_argument("--refetch-details", metavar="SOURCE",
                    help="Re-fetch detail text for every stored row of SOURCE "
                         "(e.g. vjb) and exit. Use after a parser change.")
+    p.add_argument("--hes-login", action="store_true",
+                   help="Sign in to the HES Student Portal in a browser "
+                        "window and save the session for later scans.")
     sub = p.add_subparsers(dest="command")
 
     imp = sub.add_parser("import", help="Import a jobs.db into AppData")
@@ -94,6 +97,10 @@ def _cmd_import(args) -> int:
 
 
 def _main_scan(args) -> int:
+    if getattr(args, "hes_login", False):
+        from jobscanner import hes_session
+        return hes_session.login()
+
     if getattr(args, "refetch_details", None):
         return 0 if pipeline.refetch_details(
             args.refetch_details, verbose=args.verbose) >= 0 else 1
