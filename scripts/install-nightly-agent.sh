@@ -2,8 +2,9 @@
 # Install (or remove) the launchd nightly-scan agent.
 #
 # The agent points at the *built* .app binary, not the repo's Python
-# source, so rebuilding the app with ./build-mac.sh never breaks the
-# schedule: the bundle is replaced in place at the same path.
+# source. launchd ties the agent to the build it was registered with, so
+# re-run this script after every ./build-mac.sh -- otherwise macOS kills the
+# scheduled launch (OS_REASON_CODESIGNING) and no scan runs.
 #
 # Usage:
 #   scripts/install-nightly-agent.sh            # install + (re)bootstrap

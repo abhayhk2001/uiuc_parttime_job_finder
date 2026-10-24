@@ -320,10 +320,14 @@ right after a wake), the scan retries up to 3 times, 30 s apart, before
 giving up until the next wake/reboot. Scan output is logged to
 `~/Library/Application Support/UIUC Part-Time Job Scanner/scanner-nightly.log`.
 
-Rebuilding the app (`./build-mac.sh`) never breaks the schedule — the
-agent points at the stable `dist/` path, which the build replaces in
-place. Re-run `scripts/install-nightly-agent.sh` only if you move the
-repository. Remove the agent with
+After **every** rebuild (`./build-mac.sh`) re-run
+`scripts/install-nightly-agent.sh`. launchd ties the agent to the app build it
+was registered with, and the ad-hoc-signed rebuild is a different binary, so
+macOS kills the scheduled launch (`SIGKILL (Code Signature Invalid)` /
+`OS_REASON_CODESIGNING` in `launchctl print`, a crash report in
+`~/Library/Logs/DiagnosticReports`) and no scan runs. Re-running it
+re-registers the agent and, via `RunAtLoad`, runs a scan straight away. Also
+re-run it if you move the repository. Remove the agent with
 `scripts/install-nightly-agent.sh --uninstall`.
 
 Leave the GUI's "Scan on open" setting off if you use this: the nightly
