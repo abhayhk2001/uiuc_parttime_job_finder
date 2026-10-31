@@ -29,14 +29,17 @@ Notes on the newer sources:
 
 - **HES** sits behind Illinois NetID single sign-on with MFA, so it can't be
   scraped with plain requests. Sign in once with `jobscanner --hes-login` (from
-  the built app: `"UIUC Part-Time Job Scanner" --hes-login`); this opens a browser
-  window, and the session cookies are saved to `hes_state.json` in the data
-  directory (never committed, mode 600). Scans then replay them in a headless
-  browser. When the portal expires the session the HES row of the scan summary
-  reads "HES login expired or missing -- run: jobscanner --hes-login", nothing is
-  archived, and the other sources are unaffected. It uses Playwright with your
-  installed Chrome, falling back to Chromium (`playwright install chromium`).
-  The built app does not bundle a browser.
+  the built app: `open -a "UIUC Part-Time Job Scanner" --args --hes-login`);
+  this opens a browser window, and the session cookies are saved to
+  `hes_state.json` in the data directory (never committed, mode 600). Scans then
+  replay them in a headless browser. When the portal expires the session the
+  HES row of the scan summary reads "HES login expired or missing -- run: cd
+  <repo> && <python> main.py --hes-login" — a copy-pasteable line, because the
+  scan usually starts from cron or the launchd agent, where the working
+  directory is not the checkout. Nothing is archived, and the other sources are
+  unaffected. It uses Playwright with your installed Chrome, falling back to
+  Chromium (`playwright install chromium`). The built app does not bundle a
+  browser.
 
 Each source is scanned independently: one board failing is logged and skipped, and
 never archives its own jobs on evidence it did not gather. Adding a source means

@@ -48,6 +48,30 @@ class HesLoginRequired(HesSessionError):
     """The saved session is gone or expired; the user must sign in again."""
 
 
+def relogin_command() -> str:
+    """The command that re-signs in, exactly as the user has to type it.
+
+    The scan usually starts from cron or the launchd agent, where the
+    working directory is not the checkout and ``jobscanner`` may not be
+    on PATH -- so the hint has to carry the ``cd`` that puts the user
+    where the scanner can actually be started, not just the flag.
+    """
+    if getattr(sys, "frozen", False):
+        # The bundle is its own entry point: LaunchServices hands the
+        # flag on and gui.py picks it up before any Qt import.
+        return (f'open -a "{paths.APP_DISPLAY_NAME}" '
+                f"--args --hes-login")
+    root = paths._REPO_ROOT
+    if paths._is_source_checkout() and (root / "main.py").exists():
+        # The interpreter running the scan is the one with Playwright
+        # installed, so name it rather than whatever `python` is first
+        # on the user's PATH.
+        return f'cd "{root}" && "{sys.executable or "python"}" main.py --hes-login'
+    # A regular (non-editable) install has no checkout to cd into; the
+    # console script is the entry point there.
+    return "jobscanner --hes-login"
+
+
 def is_portal_url(url: str) -> bool:
     """True when ``url`` is a page of the portal itself, not the SSO login."""
     parts = urlparse(url)
@@ -131,7 +155,7 @@ def _open_portal(ctx, timeout_ms: int):
         page.wait_for_url(is_portal_url, timeout=timeout_ms)
     except Exception as exc:  # noqa: BLE001 -- Playwright TimeoutError
         raise HesLoginRequired(
-            "HES login expired or missing -- run: jobscanner --hes-login"
+            f"HES login expired or missing -- run: {relogin_command()}"
         ) from exc
     return page
 
@@ -146,7 +170,7 @@ def fetch_portal_html() -> str:
     state = paths.hes_state_path()
     if not state.exists():
         raise HesLoginRequired(
-            "No saved HES login -- run: jobscanner --hes-login")
+            f"No saved HES login -- run: {relogin_command()}")
     with _browser_context(True, persistent=False, state_path=state) as ctx:
         page = _open_portal(ctx, REPLAY_TIMEOUT_MS)
         # The positions are injected by script; the portal flips this

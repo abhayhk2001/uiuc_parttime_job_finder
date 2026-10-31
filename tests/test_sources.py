@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from support import REPO_ROOT, check, eq, run_module  # noqa: E402
 
@@ -378,6 +379,89 @@ def test_hes_url_recognition() -> None:
     check(not hes_session.is_portal_url(
         "https://shibboleth.illinois.edu/idp/profile/SAML2/Redirect/SSO"),
         "SSO host is not the portal")
+
+
+# -- the relogin hint ------------------------------------------------------
+#
+# The scan usually runs from cron or the launchd agent, where the working
+# directory is not the checkout, so the hint has to say *where* to run the
+# re-login from -- not just which flag to pass.
+
+
+class _StuckOnSsoPage:
+    """A Playwright page stand-in that never gets past the SSO login."""
+
+    def goto(self, url: str) -> None:
+        pass
+
+    def wait_for_url(self, *args, **kwargs):
+        raise TimeoutError("the SSO login never redirected back")
+
+
+class _FreshContext:
+    """A Playwright context stand-in holding no pages."""
+
+    def __init__(self) -> None:
+        self.pages: list = []
+
+    def new_page(self) -> _StuckOnSsoPage:
+        return _StuckOnSsoPage()
+
+
+def test_hes_relogin_hint_carries_the_cd_to_the_checkout() -> None:
+    from jobscanner import hes_session
+
+    cmd = hes_session.relogin_command()
+    check(cmd.startswith("cd "),
+          f"the hint must say where to run from: {cmd!r}")
+    check(str(REPO_ROOT) in cmd,
+          f"the hint must name the checkout: {cmd!r}")
+    check("--hes-login" in cmd,
+          f"the hint must carry the flag: {cmd!r}")
+
+
+def test_hes_relogin_hint_for_the_built_app_skips_the_cd() -> None:
+    from jobscanner import hes_session
+
+    with patch.object(sys, "frozen", True, create=True):
+        cmd = hes_session.relogin_command()
+    check(cmd.startswith("open -a "),
+          f"the bundle is its own entry point: {cmd!r}")
+    check("--args --hes-login" in cmd,
+          f"the flag has to reach the bundle: {cmd!r}")
+    check("cd " not in cmd,
+          f"a bundle has no checkout to cd into: {cmd!r}")
+
+
+def test_hes_expired_session_reports_the_relogin_command() -> None:
+    from jobscanner import hes_session
+
+    try:
+        hes_session._open_portal(_FreshContext(), timeout_ms=1)
+    except hes_session.HesLoginRequired as exc:
+        message = str(exc)
+        check("run: " in message, f"the hint follows 'run: ': {message!r}")
+        check(hes_session.relogin_command() in message,
+              f"the message must carry the hint: {message!r}")
+        return
+    check(False, "a page stuck on the SSO login must raise HesLoginRequired")
+
+
+def test_hes_missing_state_file_reports_the_relogin_command() -> None:
+    from jobscanner import hes_session, paths
+
+    missing = Path("/nonexistent/hes_state.json")
+    with patch.object(paths, "hes_state_path", lambda: missing):
+        try:
+            hes_session.fetch_portal_html()
+        except hes_session.HesLoginRequired as exc:
+            message = str(exc)
+            check("run: " in message,
+                  f"the hint follows 'run: ': {message!r}")
+            check(hes_session.relogin_command() in message,
+                  f"the message must carry the hint: {message!r}")
+            return
+    check(False, "a missing state file must raise HesLoginRequired")
 
 
 def test_slugify_is_url_safe() -> None:
