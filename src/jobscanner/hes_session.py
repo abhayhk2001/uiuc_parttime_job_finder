@@ -468,6 +468,24 @@ def fetch_portal_html() -> str:
         return html
 
 
+def _say(message: str, alert: Optional[str] = None) -> None:
+    """Tell the user what is happening.
+
+    The built .app is a windowed bundle with no console, so the same
+    words go out as a macOS notification rather than going nowhere.
+    """
+    print(message)
+    if not getattr(sys, "frozen", False) or sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(
+            ["/usr/bin/osascript", "-e",
+             f"display notification {json.dumps(alert or message)}"],
+            check=False, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 @contextmanager
 def _login_browser() -> Iterator[tuple[Any, Any]]:
     """Yield the page and context the user signs in through.
@@ -487,33 +505,38 @@ def _login_browser() -> Iterator[tuple[Any, Any]]:
                               specs=_login_specs(chosen)) as ctx:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto(PORTAL_URL)
-            print(f"A {chosen.name if chosen else 'browser'} window opened. "
-                  f"Sign in with your NetID and approve the MFA prompt.")
+            _say(f"A {chosen.name if chosen else 'browser'} window opened. "
+                 f"Sign in with your NetID and approve the MFA prompt.",
+                 alert="Sign in to HES in the browser window.")
             yield page, ctx
         return
 
     names = ", ".join(b.name for b in default_browser.chromium_browsers())
-    print(f"Opening {PORTAL_URL} in your default browser "
-          f"({handler.name if handler else 'the system handler'}).")
+    _say(f"Opening {PORTAL_URL} in your default browser "
+         f"({handler.name if handler else 'the system handler'}).",
+         alert="Opening the HES sign-in in your default browser.")
     if names:
-        print(f"Attach-capable browsers started: {names}. Pick one of those "
-              f"in the browser picker, or the session cannot be captured.")
+        _say(f"Attach-capable browsers started: {names}. Pick one of those "
+             f"in the browser picker, or the session cannot be captured.",
+             alert=f"Pick {names} in the browser picker.")
     with _launcher_login() as picked:
         if picked is not None:
             page, ctx = picked
-            print("Sign in with your NetID and approve the MFA prompt.")
+            _say("Sign in with your NetID and approve the MFA prompt.",
+                 alert="Sign in to HES in the browser window.")
             yield page, ctx
             return
 
-    print("[hes] The URL did not reach a browser the scanner can attach to "
-          "(Safari cannot be captured). Falling back to a browser of our own.",
-          file=sys.stderr)
+    _say("[hes] The URL did not reach a browser the scanner can attach to "
+         "(Safari cannot be captured). Falling back to a browser of our own.",
+         alert="The browser you picked cannot be used; a new one is opening.")
     with _browser_context(False, persistent=True,
                           specs=_login_specs(None)) as ctx:
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto(PORTAL_URL)
-        print("A browser window opened. Sign in with your NetID and approve "
-              "the MFA prompt.")
+        _say("A browser window opened. Sign in with your NetID and approve "
+             "the MFA prompt.",
+             alert="Sign in to HES in the browser window.")
         yield page, ctx
 
 
