@@ -37,9 +37,22 @@ Notes on the newer sources:
   <repo> && <python> main.py --hes-login" — a copy-pasteable line, because the
   scan usually starts from cron or the launchd agent, where the working
   directory is not the checkout. Nothing is archived, and the other sources are
-  unaffected. It uses Playwright with your installed Chrome, falling back to
-  Chromium (`playwright install chromium`). The built app does not bundle a
-  browser.
+  unaffected. The sign-in happens in **your own browser**, not a browser the
+  scanner picks for you:
+
+  - If the OS opens web URLs with a browser the scanner can drive (Chrome,
+    Edge, Brave, Arc), that browser is used — the scanner launches it with a
+    debugging port and signs in there.
+  - If the default is a *launcher* — Velja shows a picker and hands the URL to
+    a browser of your choosing — the scanner starts the Chromium browsers it
+    can drive with a debugging port, lets the picker decide, and captures the
+    session from whichever browser the URL lands in. **Safari cannot be
+    captured**, so pick Chrome, Edge or Brave in the picker; if you pick
+    something else the scanner says so and falls back to a browser of its own.
+  - Playwright's WebKit (`playwright install webkit`) is the fallback when no
+    browser can be captured. WebKit is Safari's engine.
+
+  The built app does not bundle a browser.
 
 Each source is scanned independently: one board failing is logged and skipped, and
 never archives its own jobs on evidence it did not gather. Adding a source means
@@ -353,6 +366,8 @@ src/jobscanner/
   pipeline.py             a scan: fetch, diff, backfill, match, alert, auto-archive
   matching.py             case-insensitive keyword matching + rematch_all
   alerts.py               macOS sound + console summary (V2: WhatsApp bot)
+  hes_session.py          the HES portal's saved login: sign-in, cookies, replay
+  default_browser.py      which browser the HES sign-in uses, and how it is found
   sources/                one module per job board; add a board here
     base.py               the Source interface + ListingRow / Detail shapes
     vjb.py                Virtual Job Board (wraps scraper/)
@@ -459,7 +474,7 @@ A scan writes to the DB in several places (`init_db` migrations, `upsert_listing
 ## Tests
 
 ```bash
-pytest tests/                               # everything (98 tests)
+pytest tests/                               # everything (200 tests)
 pytest tests/test_db_isolated.py           # storage layer only
 python tests/test_gui_workflow.py          # one module, as a plain script
 python tests/test_gui_bulk_actions.py
@@ -469,12 +484,13 @@ python tests/smoke_skeleton.py             # standalone smoke (no DB needed)
 python tests/smoke_table.py
 ```
 
-158 tests in seven layers:
+200 tests in eight layers:
 
 | Module | Covers |
 | ------ | ------ |
 | `test_db_isolated.py` | Storage: schema + migrations, upserts, section queries and counts, every state transition, bulk actions, backup/prune, id namespacing and per-source archiving |
-| `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards, both Clearinghouse markup shapes, and the VJB title promotion + its fallback |
+| `test_sources.py` | Each board's listing/detail parsing against captured fixtures, including empty boards, both Clearinghouse markup shapes, the VJB title promotion + its fallback, and the HES re-login hint |
+| `test_default_browser.py` | Which browser the HES sign-in uses: Chromium-app detection, the default-browser and fallback order, the SameSite fix-up that lets a session captured in one engine replay in another, and the launcher's tab hand-off |
 | `test_gui_grouping.py` | The table's per-source sections: registry ordering, headings with counts, sorting within sections, filtering dropping empty ones, headings not selectable as jobs, collapse surviving a relaunch |
 | `test_gui_workflow.py` | Sections, selection, the full New → To Apply → Applied → Archived walk, sorting, filtering, the keywords + follow-up dialogs, layout persistence via QSettings, action toasts, multi-select |
 | `test_gui_bulk_actions.py` | Every registered bulk action, both confirmation paths, the status-bar toast, the All section |
